@@ -1,0 +1,5 @@
+# Internal Docker bridge address: only the existing HTTPS proxy may reach this port.
+listen = "172.18.0.1:18797"
+database = "/var/lib/relay-hub/accounts.sqlite3"
+admin_token_file = "/etc/relay-hub/owner.token"
+public_dir = "/var/lib/relay-hub/public"

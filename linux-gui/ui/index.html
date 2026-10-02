@@ -18,14 +18,83 @@
         </header>
 
         <div class="profiles-heading">
-          <span>Профили</span>
-          <button id="addProfileSmall" class="icon-button" aria-label="Добавить профиль">+</button>
+          <span>Серверы</span>
+          <button id="addProfileSmall" class="icon-button" aria-label="Добавить сервер по ключу" title="Добавить сервер по ключу">+</button>
         </div>
-        <div id="profiles" class="profiles" aria-live="polite"></div>
-        <button id="addProfile" class="add-profile-button">
-          <span>+</span>
-          Добавить конфигурацию
-        </button>
+        <div id="profiles" class="profiles" aria-label="Доступные серверы"></div>
+        <nav class="sidebar-nav" aria-label="Разделы приложения">
+          <button id="openAccount" class="app-exclusions-button hidden" type="button"><span aria-hidden="true">◉</span><span class="button-copy"><strong>Мой аккаунт</strong><small id="accountBadge">Войти и посмотреть подписку</small></span></button>
+          <button id="openBilling" class="app-exclusions-button" type="button"><span aria-hidden="true">₽</span><span class="button-copy"><strong>Оплата</strong><small>Продлить подписку</small></span></button>
+          <button id="openSupport" class="app-exclusions-button hidden" type="button"><span aria-hidden="true">✉</span><span class="button-copy"><strong>Поддержка</strong><small id="supportBadge">Написать администрации</small></span></button>
+          <button id="openSettings" class="app-exclusions-button" type="button"><span aria-hidden="true">⚙</span><span class="button-copy"><strong>Настройки</strong><small>Ключи и диагностика</small></span></button>
+        </nav>
+      </aside>
+
+      <main class="main-content">
+        <header class="topbar">
+          <div>
+            <span class="eyebrow">ВЫБРАННЫЙ СЕРВЕР</span>
+            <h2 id="activeProfileName">Нет конфигураций</h2>
+            <p id="activeEndpoint">Добавьте первый профиль</p>
+          </div>
+          <div id="connectionBadge" class="connection-badge disconnected" aria-hidden="true" hidden>
+            <span></span>
+            Отключено
+          </div>
+        </header>
+
+        <section class="connection-panel">
+          <button id="powerButton" class="power-button" aria-label="Включить VPN" disabled>
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M18.36 6.64a9 9 0 1 1-12.73 0M12 2v10" />
+            </svg>
+          </button>
+          <h3 id="statusTitle" role="status">VPN выключен</h3>
+          <p id="statusMessage">Выберите профиль и нажмите, чтобы подключиться</p>
+          <p id="sessionTime" class="session-time hidden">Время подключения <strong id="timeValue">—</strong></p>
+          <div id="connectedServer" class="connected-server hidden">
+            <span>VPN ПОКА ПОДКЛЮЧЁН К ДРУГОМУ СЕРВЕРУ</span>
+            <strong id="connectedServerName">—</strong>
+            <small id="connectedServerEndpoint">—</small>
+          </div>
+        </section>
+
+        <section id="protocolSelector" class="protocol-card hidden">
+          <div class="protocol-copy">
+
+            <strong>Режим маскировки</strong>
+            <small id="protocolHint">Обычный MouseVPN для старых клиентов</small>
+          </div>
+          <label class="protocol-select-label" for="protocolMode">
+            <select id="protocolMode" aria-label="Режим маскировки">
+              <option value="legacy">Legacy — совместимый</option>
+              <option value="morph_quiet">Morph Quiet — экономный</option>
+              <option value="morph_balanced">Morph Balanced — усиленный</option>
+              <option value="morph_paranoid">Morph Paranoid — максимальный</option>
+            </select>
+          </label>
+        </section>
+
+        <details class="connection-details">
+          <summary>Детали соединения</summary>
+          <dl><div><dt>Адрес сервера</dt><dd id="serverValue">—</dd></div><div><dt>Состояние</dt><dd id="connectionDetail">VPN выключен</dd></div></dl>
+        </details>
+      </main>
+    </div>
+
+    <div id="billingModal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="billingTitle">
+      <section class="modal-card billing-modal"><div class="modal-header"><h2 id="billingTitle">Оплата и продление</h2><button id="closeBilling" class="close-button" type="button" aria-label="Закрыть оплату">×</button></div>
+      <p class="modal-description">Переведите деньги по реквизитам в приложении своего банка. Затем отправьте заявку — владелец проверит поступление и продлит подписку.</p>
+      <p id="billingStatus" role="status" aria-live="polite"></p>
+      <div id="billingDetails" class="hidden"><div class="billing-recipient"><small id="billingBank"></small><strong id="billingRecipient"></strong><div class="billing-card-number"><input id="billingCard" readonly aria-label="Номер карты получателя"><button id="billingCopy" type="button" class="secondary-button">Копировать</button></div><p id="billingInstructions"></p></div>
+      <form id="billingForm"><div class="billing-amount"><label for="billingMonths">Месяцы<input id="billingMonths" type="number" min="3" max="120" step="1" value="3" required></label><div><strong id="billingTotal">900 ₽</strong><small>300 ₽ в месяц · от 3 месяцев</small></div></div><label for="billingNote">Комментарий к переводу (необязательно)</label><textarea id="billingNote" maxlength="500" rows="2" placeholder="Имя отправителя, дата и время перевода"></textarea><button id="billingSubmit" class="primary-button" type="submit">Я оплатил — отправить заявку</button></form></div>
+      <p id="billingPending" class="hidden">Заявка на проверке. Повторно переводить деньги не нужно. Результат появится здесь автоматически.</p><h3>Мои заявки</h3><div id="billingHistory"></div><button id="billingRefresh" type="button" class="secondary-button">Обновить</button>
+      </section></div>
+    <div id="settingsModal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
+      <section class="modal-card settings-modal">
+        <div class="modal-header"><h2 id="settingsTitle">Настройки</h2><button id="closeSettings" class="close-button" type="button" aria-label="Закрыть настройки">×</button></div>
+        <p class="modal-description">Дополнительные возможности и помощь с соединением.</p>
+        <button id="addProfile" class="app-exclusions-button" type="button"><span aria-hidden="true">+</span><span class="button-copy"><strong>Добавить сервер по ключу</strong><small>Для конфигураций формата MV1</small></span></button>
         <button id="appExclusions" class="app-exclusions-button hidden" type="button">
           <span>⊘</span>
           <span class="button-copy">
@@ -49,76 +118,40 @@
           </span>
         </label>
 
-        <footer class="sidebar-footer">
-          <span class="security-mark">✓</span>
-          <div>
-            <strong>Ключи хранятся локально</strong>
-            <span>Доступ только для вашего пользователя</span>
-          </div>
-        </footer>
-      </aside>
+        <p class="settings-note">Ключи хранятся на этом компьютере и доступны только вашему пользователю.</p>
+      </section>
+    </div>
 
-      <main class="main-content">
-        <header class="topbar">
-          <div>
-            <span class="eyebrow">ТЕКУЩИЙ ПРОФИЛЬ</span>
-            <h2 id="activeProfileName">Нет конфигураций</h2>
-            <p id="activeEndpoint">Добавьте первый профиль</p>
-          </div>
-          <div id="connectionBadge" class="connection-badge disconnected">
-            <span></span>
-            Отключено
-          </div>
-        </header>
+    <div id="accountModal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="accountModalTitle">
+      <section class="modal-card">
+        <div class="modal-header"><h2 id="accountModalTitle">Мой аккаунт</h2><button id="closeAccount" class="close-button" type="button" aria-label="Закрыть">×</button></div>
+        <form id="accountForm">
+          <label for="accountBase">Адрес сервиса HTTPS</label><input id="accountBase" type="url" placeholder="https://vpn.example.ru" required />
+          <label for="accountLogin">Почта или логин</label><input id="accountLogin" autocomplete="username" required />
+          <label for="accountPassword">Пароль</label><input id="accountPassword" type="password" autocomplete="current-password" required />
+          <button id="accountSignIn" class="primary-button" type="submit">Войти</button>
+        </form>
+        <button id="accountSignup" class="secondary-button hidden" type="button">Создать аккаунт на сайте</button>
+        <p id="accountNotice" class="field-help" role="status"></p>
+        <p id="accountStatus" class="modal-description" role="status"></p>
+        <div id="accountDetails" class="hidden">
+          <p id="subscriptionUntil" class="modal-description"></p><p class="field-help">300 ₽ в месяц · минимум 900 ₽ за 3 месяца · два устройства</p>
+          <h3>Мои устройства <small id="deviceCount"></small></h3>
+          <button id="accountRegister" class="primary-button hidden" type="button">Подключить этот компьютер к подписке</button>
+          <div id="accountDevices" class="account-devices"></div>
+          <div class="dialog-actions"><button id="accountRefresh" class="secondary-button" type="button">Обновить</button><button id="accountContact" class="secondary-button hidden" type="button">Оплата и помощь</button><button id="accountLogout" class="secondary-button" type="button">Выйти</button></div>
+        </div>
+      </section>
+    </div>
 
-        <section class="connection-panel">
-          <button id="powerButton" class="power-button" aria-label="Включить VPN" disabled>
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M18.36 6.64a9 9 0 1 1-12.73 0M12 2v10" />
-            </svg>
-          </button>
-          <h3 id="statusTitle">VPN выключен</h3>
-          <p id="statusMessage">Выберите профиль и нажмите, чтобы подключиться</p>
-          <div id="connectedServer" class="connected-server hidden">
-            <span>ТЕКУЩЕЕ СОЕДИНЕНИЕ</span>
-            <strong id="connectedServerName">—</strong>
-            <small id="connectedServerEndpoint">—</small>
-          </div>
-        </section>
-
-        <section id="protocolSelector" class="protocol-card hidden">
-          <div class="protocol-copy">
-            <span class="eyebrow">ПРОТОКОЛ</span>
-            <strong>Режим маскировки</strong>
-            <small id="protocolHint">Обычный MouseVPN для старых клиентов</small>
-          </div>
-          <label class="protocol-select-label" for="protocolMode">
-            <select id="protocolMode" aria-label="Режим маскировки">
-              <option value="legacy">Legacy — совместимый</option>
-              <option value="morph_quiet">Morph Quiet — экономный</option>
-              <option value="morph_balanced">Morph Balanced — усиленный</option>
-              <option value="morph_paranoid">Morph Paranoid — максимальный</option>
-            </select>
-          </label>
-        </section>
-
-        <section class="stats-card">
-          <div class="stat">
-            <span class="stat-icon">◈</span>
-            <div><span>Сервер</span><strong id="serverValue">—</strong></div>
-          </div>
-          <div class="divider"></div>
-          <div class="stat">
-            <span class="stat-icon">↕</span>
-            <div><span>Трафик</span><strong>—</strong></div>
-          </div>
-          <div class="divider"></div>
-          <div class="stat">
-            <span class="stat-icon">◷</span>
-            <div><span>Время</span><strong id="timeValue">—</strong></div>
-          </div>
-        </section>
-      </main>
+    <div id="supportModal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="supportTitle">
+      <section class="modal-card support-modal">
+        <div class="modal-header"><h2 id="supportTitle">Поддержка и сообщения</h2><button id="closeSupport" class="close-button" type="button" aria-label="Закрыть">×</button></div>
+        <p id="supportStatus" class="modal-description" role="status"></p>
+        <div id="supportList"></div>
+        <form id="supportCreate"><label for="supportSubject">Новое обращение</label><input id="supportSubject" placeholder="Тема вопроса" maxlength="80" required><label for="supportText">Ваш вопрос</label><textarea id="supportText" rows="3" maxlength="2000" required></textarea><button id="supportSend" class="primary-button">Отправить вопрос</button></form>
+        <div id="supportConversation" class="hidden"><button id="supportBack" class="secondary-button" type="button">← Все обращения</button><h3 id="supportConversationTitle"></h3><button id="supportOlder" class="secondary-button hidden" type="button">Более ранние сообщения</button><div id="supportMessages"></div><form id="supportReplyForm"><label for="supportReplyText">Ответ</label><textarea id="supportReplyText" rows="3" maxlength="2000" required></textarea><button id="supportReplySend" class="primary-button">Отправить</button></form></div>
+      </section>
     </div>
 
     <div id="profileModal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="profileModalTitle">
@@ -238,5 +271,6 @@
     </div>
 
     <script src="app.js"></script>
+    <script src="billing.js"></script>
   </body>
 </html>

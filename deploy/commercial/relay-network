@@ -1,0 +1,28 @@
+#!/bin/sh
+# First node: dedicated table, interface and subnet. Existing VPN rules stay intact.
+set -eu
+case "${1:-}" in
+  start)
+    if ! nft list table inet relay_node >/dev/null 2>&1; then
+      nft -f /etc/relay-node/relay.nft
+    fi
+    if ! iptables -w -C DOCKER-USER -i relay0 -o ens3 -s 10.78.0.0/24 -j ACCEPT 2>/dev/null; then
+      iptables -w -I DOCKER-USER 1 -i relay0 -o ens3 -s 10.78.0.0/24 -j ACCEPT
+    fi
+    if ! iptables -w -C DOCKER-USER -i ens3 -o relay0 -d 10.78.0.0/24 -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2>/dev/null; then
+      iptables -w -I DOCKER-USER 1 -i ens3 -o relay0 -d 10.78.0.0/24 -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+    fi
+    ;;
+  stop)
+    for direction in outbound inbound; do
+      if [ "$direction" = outbound ]; then
+        set -- -i relay0 -o ens3 -s 10.78.0.0/24 -j ACCEPT
+      else
+        set -- -i ens3 -o relay0 -d 10.78.0.0/24 -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+      fi
+      if iptables -w -C DOCKER-USER "$@" 2>/dev/null; then iptables -w -D DOCKER-USER "$@"; fi
+    done
+    if nft list table inet relay_node >/dev/null 2>&1; then nft delete table inet relay_node; fi
+    ;;
+  *) echo 'usage: relay-network start|stop' >&2; exit 2 ;;
+esac

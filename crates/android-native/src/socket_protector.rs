@@ -12,6 +12,22 @@ pub(crate) struct SocketProtector {
 }
 
 impl SocketProtector {
+    pub(crate) fn connection_cancelled(&self, generation: i64) -> Result<bool> {
+        let mut env = self.vm.attach_current_thread()?;
+        let service = self
+            .service
+            .as_ref()
+            .ok_or_else(|| anyhow!("VPN service reference is unavailable"))?;
+        Ok(env
+            .call_method(
+                service.as_obj(),
+                "isConnectionCancelled",
+                "(J)Z",
+                &[JValue::Long(generation)],
+            )?
+            .z()?)
+    }
+
     pub(crate) fn new(env: &JNIEnv<'_>, service: &JObject<'_>) -> Result<Self> {
         Ok(Self {
             vm: env.get_java_vm()?,

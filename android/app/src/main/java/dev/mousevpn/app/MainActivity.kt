@@ -46,6 +46,23 @@ class MainActivity : Activity() {
     private lateinit var networkTestResult: TextView
     private val handler = Handler(Looper.getMainLooper())
     private val networkTestExecutor = Executors.newSingleThreadExecutor()
+    private val accountExecutor = Executors.newSingleThreadExecutor()
+    @Volatile private var accountRefreshing = false
+    private val refreshAccount = object : Runnable {
+        override fun run() {
+            if (!accountRefreshing && AccountManager(this@MainActivity).signedIn()) {
+                accountRefreshing = true
+                accountExecutor.execute {
+                    runCatching { AccountManager(this@MainActivity).refresh() }
+                    accountRefreshing = false
+                    handler.post {
+                        if (!isFinishing && !isDestroyed) { refreshProfile(); updateInboxBadge() }
+                    }
+                }
+            }
+            handler.postDelayed(this, 30_000)
+        }
+    }
     @Volatile private var connected = false
     private var connecting = false
     private var bindingProtocol = true
@@ -72,7 +89,8 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
-        findViewById<View>(R.id.mainContent).applySystemBarPadding(20, 18, 20, 20)
+        findViewById<View>(R.id.mainShell).applySystemBarPadding(0, 0, 0, 0)
+        AppUi.navigation(this, findViewById(R.id.bottomNavigation), AppUi.Tab.CONNECTION)
         store = ProfileStore(this)
         profileName = findViewById(R.id.profileName)
         endpoint = findViewById(R.id.serverEndpoint)
@@ -93,9 +111,10 @@ class MainActivity : Activity() {
         protocolMode.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
             override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
                 if (bindingProtocol) return
-                val profile = store.selected() ?: return
+                val profile = store.selected()
                 val protocol = VpnProtocol.entries.getOrNull(position) ?: VpnProtocol.LEGACY
-                if (profile.protocol != protocol) store.save(profile.copy(protocol = protocol), select = false)
+                if (profile == null || profile.accountId != null) store.setAccountProtocol(protocol)
+                else if (profile.protocol != protocol) store.save(profile.copy(protocol = protocol), select = false)
                 updateProtocolUi()
             }
 
@@ -103,6 +122,14 @@ class MainActivity : Activity() {
         }
 
         findViewById<View>(R.id.addProfile).setOnClickListener { openAddProfile() }
+        findViewById<View>(R.id.accountCta).setOnClickListener {
+            startActivity(Intent(this, AccountActivity::class.java))
+        }
+        findViewById<Button>(R.id.advancedToggle).setOnClickListener {
+            val panel = findViewById<View>(R.id.advancedSettings)
+            panel.visibility = if (panel.visibility == View.VISIBLE) View.GONE else View.VISIBLE
+            findViewById<Button>(R.id.advancedToggle).setText(if (panel.visibility == View.VISIBLE) R.string.advanced_hide else R.string.advanced_show)
+        }
         findViewById<View>(R.id.profileChooser).setOnClickListener { showProfileChooser() }
         findViewById<View>(R.id.profileMenu).setOnClickListener { showProfileMenu() }
         findViewById<View>(R.id.excludedApps).setOnClickListener {
@@ -113,7 +140,7 @@ class MainActivity : Activity() {
         }
         networkTestButton.setOnClickListener { startNetworkTest() }
         powerButton.setOnClickListener {
-            if (connected) disconnect() else if (!connecting) requestConnection()
+            if (connected || connecting) disconnect() else requestConnection()
         }
 
         if (Build.VERSION.SDK_INT >= 33 &&
@@ -135,21 +162,30 @@ class MainActivity : Activity() {
         refreshProfile()
         applyStatus(MouseVpnService.currentStatus)
         handler.post(clock)
+        updateInboxBadge()
+        handler.post(refreshAccount)
     }
 
     override fun onStop() {
         handler.removeCallbacks(clock)
+        handler.removeCallbacks(refreshAccount)
         unregisterReceiver(statusReceiver)
         super.onStop()
     }
 
     override fun onDestroy() {
         networkTestExecutor.shutdownNow()
+        accountExecutor.shutdownNow()
         super.onDestroy()
     }
 
     private fun openAddProfile() {
         startActivity(Intent(this, AddProfileActivity::class.java))
+    }
+
+    private fun updateInboxBadge() {
+        val unread = runCatching { AccountManager(this).state()?.optJSONObject("account")?.optLong("unread_messages", 0) ?: 0 }.getOrDefault(0)
+        findViewById<TextView>(R.id.navSupportLabel).text = if (unread > 0) "Помощь · $unread" else "Помощь"
     }
 
     private fun refreshProfile() {
@@ -158,17 +194,18 @@ class MainActivity : Activity() {
             null
         }
         if (profile == null) {
-            profileName.setText(R.string.no_profiles)
-            endpoint.setText(R.string.add_profile_hint)
+            profileName.setText(R.string.select_server)
+            endpoint.setText(R.string.server_after_login)
             statServer.text = "—"
         } else {
             profileName.text = profile.name
-            endpoint.text = profile.endpoint
+            endpoint.text = AccountManager(this).serverLoad(profile)
             statServer.text = profile.name
         }
         bindingProtocol = true
-        protocolMode.setSelection(profile?.protocol?.ordinal ?: VpnProtocol.LEGACY.ordinal, false)
+        protocolMode.setSelection(profile?.protocol?.ordinal ?: store.accountProtocol().ordinal, false)
         bindingProtocol = false
+        updateAccountBanner()
         updateProtocolUi()
         updatePowerEnabled()
     }
@@ -179,7 +216,7 @@ class MainActivity : Activity() {
             return
         }
         if (profiles.isEmpty()) {
-            openAddProfile()
+            startActivity(Intent(this, AccountActivity::class.java))
             return
         }
         val selectedId = store.selected()?.id
@@ -192,7 +229,7 @@ class MainActivity : Activity() {
         profiles.forEach { profile ->
             val row = layoutInflater.inflate(R.layout.item_profile_option, options, false)
             row.findViewById<TextView>(R.id.optionName).text = profile.name
-            row.findViewById<TextView>(R.id.optionEndpoint).text = profile.endpoint
+            row.findViewById<TextView>(R.id.optionEndpoint).text = AccountManager(this).serverLoad(profile)
             row.findViewById<View>(R.id.selectedIndicator).visibility =
                 if (profile.id == selectedId) View.VISIBLE else View.INVISIBLE
             row.setOnClickListener {
@@ -259,6 +296,12 @@ class MainActivity : Activity() {
             openAddProfile()
             return
         }
+        val profile = store.selected() ?: return
+        if (profile.accountId != null && !AccountManager(this).allowed(profile)) {
+            toast("Подписка истекла или устройство отключено. Обновите данные в аккаунте.")
+            startActivity(Intent(this, AccountActivity::class.java))
+            return
+        }
         val permission = VpnService.prepare(this)
         if (permission == null) connect() else startActivityForResult(permission, VPN_REQUEST)
     }
@@ -281,7 +324,7 @@ class MainActivity : Activity() {
 
     private fun applyStatus(message: String) {
         connected = message.startsWith("Подключено")
-        connecting = message.startsWith("Подключение")
+        connecting = message.startsWith("Подключение") || message.startsWith("Смена сети")
         statusTitle.setText(
             when {
                 connected -> R.string.status_on_title
@@ -307,16 +350,28 @@ class MainActivity : Activity() {
 
     private fun updateProtocolUi() {
         val profile = runCatching { store.selected() }.getOrNull()
-        val protocol = profile?.protocol ?: VpnProtocol.LEGACY
+        val protocol = profile?.protocol ?: store.accountProtocol()
         val hints = resources.getStringArray(R.array.protocol_mode_hints)
         protocolHint.text = hints.getOrElse(protocol.ordinal) { hints[0] }
-        protocolMode.isEnabled = profile != null && !connected && !connecting
+        protocolMode.isEnabled = !connected && !connecting
         protocolMode.alpha = if (protocolMode.isEnabled) 1f else 0.48f
     }
 
     private fun updatePowerEnabled() {
-        powerButton.isEnabled = !connecting && store.selected() != null
+        powerButton.isEnabled = connected || connecting || store.selected() != null
+        powerButton.contentDescription = if (connecting) "Отменить подключение" else if (connected) "Отключить VPN" else "Подключить VPN"
         powerButton.alpha = if (powerButton.isEnabled) 1f else 0.48f
+    }
+
+    private fun updateAccountBanner() {
+        val manager = AccountManager(this)
+        val account = manager.state()?.optJSONObject("account")
+        val signedIn = manager.signedIn()
+        val active = signedIn && account?.optBoolean("active") == true
+        findViewById<View>(R.id.accountBanner).visibility = if (active || store.selected()?.accountId == null && store.selected() != null) View.GONE else View.VISIBLE
+        findViewById<TextView>(R.id.accountBannerTitle).text = if (signedIn) "Подписка ждёт активации" else getString(R.string.welcome_title)
+        findViewById<TextView>(R.id.accountBannerHint).text = if (signedIn) "После подтверждения оплаты появятся ваши серверы." else getString(R.string.welcome_hint)
+        findViewById<Button>(R.id.accountCta).text = if (signedIn) "Открыть подписку" else getString(R.string.login_action)
     }
 
     private fun startNetworkTest() {

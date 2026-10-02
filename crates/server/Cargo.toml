@@ -4,9 +4,19 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
+autobins = false
+
+[[bin]]
+name = "mousevpn-server"
+path = "src/main.rs"
+
+[[bin]]
+name = "relay-agent"
+path = "src/bin/relay-agent.rs"
 
 [dependencies]
 mousevpn-admin-api = { path = "../admin-api" }
+mousevpn-account-client = { path = "../account-client" }
 mousevpn-config = { path = "../config" }
 mousevpn-crypto = { path = "../crypto" }
 mousevpn-data-plane = { path = "../data-plane" }

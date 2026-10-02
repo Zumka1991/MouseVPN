@@ -10,7 +10,7 @@ use mousevpn_client_wire::ClientWire;
 use mousevpn_config::{ClientConfig, ClientProtocol};
 
 use crate::{
-    handshake::{bind_socket, negotiate},
+    handshake::{bind_socket, negotiate_cancellable},
     registry::{
         insert_pending, insert_running, metrics, network_changed, status, stop, take_pending,
         PendingSession,
@@ -28,6 +28,7 @@ pub extern "system" fn Java_dev_mousevpn_app_NativeBridge_prepare(
     server_public_key: JString,
     client_private_key: JString,
     protocol: JString,
+    generation: jlong,
 ) -> jstring {
     let result = catch_unwind(AssertUnwindSafe(|| {
         prepare(
@@ -37,6 +38,7 @@ pub extern "system" fn Java_dev_mousevpn_app_NativeBridge_prepare(
             &server_public_key,
             &client_private_key,
             &protocol,
+            generation,
         )
     }));
     match result {
@@ -61,6 +63,7 @@ fn prepare(
     server_public_key: &JString,
     client_private_key: &JString,
     protocol: &JString,
+    generation: i64,
 ) -> Result<String> {
     let protocol = parse_protocol(env.get_string(protocol)?.to_str()?)?;
     let config = ClientConfig {
@@ -75,7 +78,9 @@ fn prepare(
     let protector = SocketProtector::new(env, service)?;
     let socket = bind_socket(config.server)?;
     protector.protect(&socket)?;
-    let (transport, plane, parameters) = negotiate(socket, &config, &wire)?;
+    let (transport, plane, parameters) = negotiate_cancellable(socket, &config, &wire, || {
+        protector.connection_cancelled(generation)
+    })?;
     let handle = insert_pending(PendingSession {
         transport,
         plane,
@@ -177,4 +182,23 @@ pub extern "system" fn Java_dev_mousevpn_app_NativeBridge_metrics(
 
 fn throw(env: &mut JNIEnv, error: &anyhow::Error) {
     let _ = env.throw_new("java/lang/IllegalStateException", format!("{error:#}"));
+}
+
+#[no_mangle]
+pub extern "system" fn Java_dev_mousevpn_app_NativeBridge_generateDeviceKeys(
+    mut env: JNIEnv,
+    _object: JObject,
+) -> jstring {
+    if let Ok(Ok(keys)) = catch_unwind(AssertUnwindSafe(mousevpn_crypto::KeyPair::generate)) {
+        let json = serde_json::json!({
+            "private_key":mousevpn_config::encode_secret_key(&keys.secret),
+            "public_key":mousevpn_config::encode_public_key(&keys.public),
+        })
+        .to_string();
+        env.new_string(json)
+            .map_or(std::ptr::null_mut(), JString::into_raw)
+    } else {
+        throw(&mut env, &anyhow!("device key generation failed"));
+        std::ptr::null_mut()
+    }
 }

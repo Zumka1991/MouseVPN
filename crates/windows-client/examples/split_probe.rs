@@ -93,7 +93,8 @@ mod windows {
     }
 
     fn usage() -> String {
-        "usage: split_probe --config <profile.toml> (--include | --exclude) <app.exe> ...".to_owned()
+        "usage: split_probe --config <profile.toml> (--include | --exclude) <app.exe> ..."
+            .to_owned()
     }
 
     /// Stops the session when a line arrives on standard input.

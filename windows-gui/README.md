@@ -146,3 +146,27 @@ against the publisher's SHA-256 value
 `07c256185d6ee3652e09fa55c0b673e2624b565e02c4b9091c79ca7d2f24ef51`.
 Its redistribution license is kept at
 `crates/windows-client/vendor/wintun/LICENSE.txt`.
+
+## Windows 0.2.1 installer from Linux
+
+The Windows build embeds the same compact interface as Linux 0.2.1. Its default
+window is 960×680 (minimum 720×560); Windows autostart and application routing
+remain in Settings. Account and support screens, live ticket updates and
+connection cancellation use the shared frontend.
+
+To cross-build the x64 **NSIS installer**, use `./windows-gui/build-linux-installer.sh`.
+This requires the Rust `x86_64-pc-windows-gnu` target, MinGW toolchain, Tauri CLI
+(`tauri` on PATH, or `TAURI_CLI`), Node.js and NSIS. For a relocated MinGW SDK,
+set Cargo's target linker and the target-specific CC/AR environment variables.
+`MOUSEVPN_ACCOUNT_URL` defaults to `https://mousevpn.space/vpn`.
+
+The output is `windows-gui/dist/MouseVPN-0.2.1-windows-setup.exe`, with SHA-256
+beside it. It includes WebView2Loader, the unmodified vendored WinDivert DLL and
+driver, license and upstream source notice. The Microsoft WebView2 runtime is
+installed by the bootstrapper when missing. It does not ship the locally
+signed test driver or enable Windows test-signing mode.
+
+This installer is unsigned. Cross-build, NSIS integrity/content checks, DLL
+imports and browser UI checks passed. Native Windows installation, networking,
+driver loading and system autostart still require the Windows test checklist;
+the browser fixture does not validate those operating-system integrations.

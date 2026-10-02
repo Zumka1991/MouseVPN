@@ -17,6 +17,35 @@ use tower::ServiceExt;
 
 const TOKEN: &str = "0123456789abcdef0123456789abcdef";
 
+#[test]
+fn empty_registry_denies_all_keys_and_stays_empty_on_restart() {
+    let temporary = TempDir::new().unwrap();
+    let registry = registry(temporary.path());
+    let record = registry.list().unwrap().remove(0);
+    let key = decode_public_key(&record.public_key).unwrap();
+    let live = registry.authorize(&key).unwrap();
+    assert!(registry.revoke(&record.public_key).unwrap());
+    assert!(!live.authorization.is_active());
+    assert!(registry.list().unwrap().is_empty());
+    assert!(registry.authorize(&key).is_none());
+    let reopened = SharedDeviceRegistry::open(
+        temporary.path().join("devices.toml"),
+        Vec::new(),
+        "10.77.0.1".parse().unwrap(),
+        24,
+    )
+    .unwrap();
+    assert!(reopened.list().unwrap().is_empty());
+    let snapshot = mousevpn_account_client::NodeSnapshot {
+        server_id: "central".to_owned(),
+        server_public_key: String::new(),
+        generated_at: 100,
+        lease_until: 400,
+        devices: Vec::new(),
+    };
+    reopened.sync_managed(&snapshot, 100).unwrap();
+}
+
 #[tokio::test]
 async fn requires_admin_token() {
     let temporary = TempDir::new().expect("temporary directory");
@@ -170,4 +199,99 @@ async fn send_json(app: &axum::Router, method: Method, uri: &str, body: Option<&
         .expect("body")
         .to_bytes();
     serde_json::from_slice(&bytes).expect("JSON response")
+}
+
+#[test]
+fn managed_expiration_and_restriction_preserve_legacy_keys_and_live_addresses() {
+    use mousevpn_account_client::{NodeDevice, NodeSnapshot};
+    let temporary = TempDir::new().unwrap();
+    let registry = registry(temporary.path());
+    let owner = registry.list().unwrap()[0].public_key.clone();
+    let owner_key = decode_public_key(&owner).unwrap();
+    let first = KeyPair::generate().unwrap();
+    let second = KeyPair::generate().unwrap();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let make = |keys: &KeyPair, name: &str| NodeDevice {
+        name: name.to_owned(),
+        platform: "windows".to_owned(),
+        public_key: mousevpn_config::encode_public_key(&keys.public),
+        valid_until: now + 120,
+    };
+    let mut snapshot = NodeSnapshot {
+        server_id: "node-a".to_owned(),
+        server_public_key: String::new(),
+        generated_at: now,
+        lease_until: now + 300,
+        devices: vec![make(&first, "first")],
+    };
+    registry.sync_managed(&snapshot, now).unwrap();
+    let first_lease = registry.authorize(&first.public).unwrap();
+    let first_address = first_lease.address;
+    snapshot.devices.insert(0, make(&second, "second"));
+    registry.sync_managed(&snapshot, now).unwrap();
+    assert_eq!(
+        registry.authorize(&first.public).unwrap().address,
+        first_address
+    );
+    assert!(first_lease.authorization.is_active());
+    let second_lease = registry.authorize(&second.public).unwrap();
+    snapshot.devices.remove(0);
+    registry.sync_managed(&snapshot, now).unwrap();
+    assert!(!second_lease.authorization.is_active());
+    assert!(registry.authorize(&second.public).is_none());
+    registry.expire_at(now + 120).unwrap();
+    assert!(!first_lease.authorization.is_active());
+    assert!(registry.authorize(&first.public).is_none());
+    assert!(registry
+        .authorize(&owner_key)
+        .unwrap()
+        .authorization
+        .is_active());
+    snapshot.devices.clear();
+    registry.sync_managed(&snapshot, now).unwrap();
+    assert_eq!(registry.list().unwrap().len(), 1);
+    assert_eq!(registry.list().unwrap()[0].public_key, owner);
+}
+
+#[test]
+fn controller_cannot_take_over_legacy_keys_or_revive_expired_keys_after_restart() {
+    use mousevpn_account_client::{NodeDevice, NodeSnapshot};
+    let temporary = TempDir::new().unwrap();
+    let registry = registry(temporary.path());
+    let legacy = registry.list().unwrap()[0].clone();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let mut snapshot = NodeSnapshot {
+        server_id: "node-a".to_owned(),
+        server_public_key: String::new(),
+        generated_at: now,
+        lease_until: now + 300,
+        devices: vec![NodeDevice {
+            name: "collision".to_owned(),
+            platform: "android".to_owned(),
+            public_key: legacy.public_key.clone(),
+            valid_until: now + 200,
+        }],
+    };
+    assert!(registry.sync_managed(&snapshot, now).is_err());
+    assert_eq!(registry.list().unwrap(), vec![legacy.clone()]);
+    let keys = KeyPair::generate().unwrap();
+    snapshot.devices[0].public_key = mousevpn_config::encode_public_key(&keys.public);
+    registry.sync_managed(&snapshot, now).unwrap();
+    let path = temporary.path().join("devices.toml");
+    let contents = std::fs::read_to_string(&path)
+        .unwrap()
+        .replace(&format!("valid_until = {}", now + 200), "valid_until = 1");
+    std::fs::write(&path, contents).unwrap();
+    let reopened =
+        SharedDeviceRegistry::open(&path, Vec::new(), "10.77.0.1".parse().unwrap(), 24).unwrap();
+    assert!(reopened.authorize(&keys.public).is_none());
+    assert!(reopened
+        .authorize(&decode_public_key(&legacy.public_key).unwrap())
+        .is_some());
 }

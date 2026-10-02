@@ -13,9 +13,9 @@ mod app_bypass;
 mod diagnostics;
 mod error;
 mod handshake;
-mod liveness;
 #[cfg(windows)]
 mod killswitch;
+mod liveness;
 #[cfg(windows)]
 mod netcfg;
 #[cfg(windows)]
@@ -26,6 +26,7 @@ mod network_events;
 mod packet_loop;
 #[cfg(windows)]
 mod platform;
+mod secure_store;
 
 #[cfg(not(windows))]
 mod platform_stub;
@@ -37,6 +38,7 @@ mod split_tunnel;
 mod windivert;
 
 pub use error::ClientError;
+pub use secure_store::{protect_account, unprotect_account};
 
 /// Performs only the authenticated UDP handshake without creating `Wintun`,
 /// routes, DNS policy or firewall state.

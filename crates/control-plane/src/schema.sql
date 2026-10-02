@@ -1,0 +1,57 @@
+PRAGMA journal_mode=WAL;
+PRAGMA foreign_keys=ON;
+CREATE TABLE IF NOT EXISTS users (
+ id TEXT PRIMARY KEY, login TEXT NOT NULL UNIQUE, password_hash TEXT NOT NULL,
+ enabled INTEGER NOT NULL DEFAULT 1, all_servers INTEGER NOT NULL DEFAULT 1,
+ valid_until INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS servers (
+ id TEXT PRIMARY KEY, name TEXT NOT NULL, endpoint TEXT NOT NULL,
+ public_key TEXT NOT NULL, protocol TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1,
+ token_hash TEXT NOT NULL UNIQUE, last_seen INTEGER
+);
+CREATE TABLE IF NOT EXISTS user_servers (
+ user_id TEXT NOT NULL REFERENCES users(id), server_id TEXT NOT NULL REFERENCES servers(id),
+ PRIMARY KEY(user_id,server_id)
+);
+CREATE TABLE IF NOT EXISTS devices (
+ id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), name TEXT NOT NULL,
+ platform TEXT NOT NULL, public_key TEXT NOT NULL UNIQUE, created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS devices_user ON devices(user_id);
+CREATE TABLE IF NOT EXISTS payments (
+ user_id TEXT NOT NULL REFERENCES users(id), reference TEXT NOT NULL,
+ amount_rub INTEGER NOT NULL, months INTEGER NOT NULL,
+ confirmed_at INTEGER NOT NULL, valid_until INTEGER NOT NULL,
+ PRIMARY KEY(user_id,reference)
+);
+CREATE TABLE IF NOT EXISTS sessions (
+ token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), expires_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS sessions_expiry ON sessions(expires_at);
+CREATE TABLE IF NOT EXISTS tickets (
+ id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), subject TEXT NOT NULL,
+ kind TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'open', created_at INTEGER NOT NULL,
+ updated_at INTEGER NOT NULL, user_read INTEGER NOT NULL DEFAULT 0, admin_read INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS tickets_user ON tickets(user_id,updated_at);
+CREATE TABLE IF NOT EXISTS ticket_messages (
+ id INTEGER PRIMARY KEY AUTOINCREMENT, ticket_id TEXT NOT NULL REFERENCES tickets(id),
+ author TEXT NOT NULL, text TEXT NOT NULL, created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ticket_messages_ticket ON ticket_messages(ticket_id,id);
+CREATE TABLE IF NOT EXISTS payment_details (
+ revision INTEGER PRIMARY KEY AUTOINCREMENT, data TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS payment_requests (
+ id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id),
+ months INTEGER NOT NULL CHECK(months BETWEEN 3 AND 120), amount_rub INTEGER NOT NULL,
+ note TEXT NOT NULL, status TEXT NOT NULL CHECK(status IN ('pending','approved','rejected')),
+ created_at INTEGER NOT NULL, decided_at INTEGER, admin_note TEXT NOT NULL DEFAULT '',
+ valid_until INTEGER, details_revision INTEGER NOT NULL REFERENCES payment_details(revision)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS one_pending_payment ON payment_requests(user_id) WHERE status='pending';
+CREATE INDEX IF NOT EXISTS payment_requests_user ON payment_requests(user_id,created_at);
+PRAGMA user_version=3;
+
+CREATE TABLE IF NOT EXISTS node_status (server_id TEXT PRIMARY KEY REFERENCES servers(id), online_devices INTEGER NOT NULL, updated_at INTEGER NOT NULL);

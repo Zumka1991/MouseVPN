@@ -13,6 +13,8 @@ members = [
     "crates/linux-platform",
     "crates/server",
     "crates/admin-api",
+    "crates/control-plane",
+    "crates/account-client",
     "crates/android-native",
     "crates/apple-native",
     "crates/macos-client",

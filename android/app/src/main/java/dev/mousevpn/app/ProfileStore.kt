@@ -50,6 +50,36 @@ class ProfileStore(context: Context) {
     }
 
     @Synchronized
+    fun accountState(): org.json.JSONObject? = preferences.getString("account", null)
+        ?.let { org.json.JSONObject(decrypt(it)) }
+
+    @Synchronized
+    fun saveAccountState(state: org.json.JSONObject) {
+        check(preferences.edit().putString("account", encrypt(state.toString())).commit()) { "Не удалось сохранить аккаунт" }
+    }
+
+    @Synchronized
+    fun replaceAccountProfiles(incoming: List<VpnProfile>) {
+        val previous = list()
+        val profiles = previous.filter { it.accountId == null } + incoming.map { it.copy(protocol = accountProtocol()) }
+        val selected = preferences.getString(SELECTED, null)
+        write(profiles)
+        if (profiles.none { it.id == selected }) {
+            preferences.edit().putString(SELECTED, profiles.firstOrNull()?.id).apply()
+        }
+    }
+
+    fun accountProtocol(): VpnProtocol = VpnProtocol.fromStored(
+        preferences.getString("account_protocol", VpnProtocol.MORPH_BALANCED.nativeValue) ?: VpnProtocol.MORPH_BALANCED.nativeValue,
+    )
+
+    @Synchronized
+    fun setAccountProtocol(protocol: VpnProtocol) {
+        preferences.edit().putString("account_protocol", protocol.nativeValue).apply()
+        write(list().map { if (it.accountId != null) it.copy(protocol = protocol) else it })
+    }
+
+    @Synchronized
     fun select(id: String) {
         require(list().any { it.id == id }) { "Профиль не найден" }
         preferences.edit().putString(SELECTED, id).apply()

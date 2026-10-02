@@ -3,6 +3,7 @@ const invoke = window.__TAURI__.core.invoke;
 const platformLabel = document.querySelector(".brand span");
 if (platformLabel && navigator.userAgent.includes("Windows")) {
   platformLabel.textContent = "Windows Client";
+  document.querySelector("#openSettings small").textContent = "Ключи, запуск и приложения";
 }
 
 const elements = {
@@ -74,6 +75,168 @@ let pendingDeleteId = null;
 let connection = { state: "disconnected", message: "VPN выключен", profileId: null };
 let connectedAt = null;
 const isWindows = navigator.userAgent.includes("Windows");
+let accountView = null;
+let accountUpdating = false;
+let supportBusy = false;
+let supportConversation = null;
+let supportEpoch = 0;
+const supportDrafts = new Map();
+async function supportInvoke(command, args) {
+  const epoch = supportEpoch;
+  const result = await invoke(command, args);
+  if (epoch !== supportEpoch) throw new Error("Аккаунт изменён");
+  return result;
+}
+
+function activeAccount(view) { return view.account?.active && view.account.valid_until > Date.now() / 1000; }
+function renderAccount(view) {
+  accountView = view;
+  const signedIn = view.signed_in;
+  document.querySelector('#accountForm').classList.toggle('hidden', signedIn);
+  document.querySelector('#accountDetails').classList.toggle('hidden', !signedIn);
+  document.querySelector('#accountBase').value = view.base || '';
+  document.querySelector('#accountBase').classList.toggle('hidden', !isWindows);
+  document.querySelector('label[for=accountBase]').classList.toggle('hidden', !isWindows);
+  document.querySelector('#accountSignup').classList.toggle('hidden', isWindows || signedIn);
+  document.querySelector('#accountRegister').classList.toggle('hidden', isWindows || !signedIn || view.registered);
+  document.querySelector('#deviceCount').textContent = `${view.account?.devices?.length || 0} из ${view.account?.device_limit || 2} устройств`;
+  document.querySelector('#accountNotice').textContent = view.notice || (signedIn && !activeAccount(view) ? 'После подтверждения оплаты подписка появится здесь.' : '');
+  document.querySelector('#accountLogin').value = view.account?.login || '';
+  const active = view.account?.active && view.account.valid_until > Date.now() / 1000;
+  document.querySelector('#accountBadge').textContent = signedIn ? (active ? `Подписка до ${new Date(view.account.valid_until * 1000).toLocaleDateString('ru-RU')}` : 'Подписка неактивна') : 'Войти и посмотреть подписку';
+  document.querySelector('#supportBadge').textContent = view.account?.unread_messages ? `Непрочитанных: ${view.account.unread_messages}` : 'Написать администрации';
+  document.querySelector('#subscriptionUntil').textContent = view.account ? `${view.account.login} · ${active ? 'Действует до' : 'Неактивна, срок'}: ${view.account.valid_until ? new Date(view.account.valid_until * 1000).toLocaleString('ru-RU') : 'не оплачено'}` : '';
+  const list = document.querySelector('#accountDevices');
+  list.replaceChildren();
+  for (const device of view.account?.devices || []) {
+    const row = document.createElement('div'); row.className = 'account-device';
+    const label = document.createElement('span'); label.textContent = `${device.name} · ${device.platform}${device.public_key === view.public_key ? ' · это устройство' : ''}`;
+    const button = document.createElement('button'); button.className = 'secondary-button compact-button'; button.textContent = 'Отключить';
+    button.onclick = () => accountAction(button, async () => {
+      if (!window.confirm(`Отключить устройство «${device.name}»?`)) return;
+      renderAccount(await invoke('account_revoke_device', { id: device.id }));
+      await refreshProfiles();
+    });
+    row.append(label, button); list.append(row);
+  }
+}
+
+async function accountAction(button, job) {
+  if (accountUpdating) return;
+  accountUpdating = true; button.disabled = true;
+  const status = document.querySelector('#accountStatus'); status.textContent = 'Подождите…';
+  try { await job(); status.textContent = accountView?.notice || 'Данные обновлены'; }
+  catch (error) { status.textContent = String(error); }
+  finally { button.disabled = false; accountUpdating = false; }
+}
+
+async function refreshAccount() {
+  renderAccount(await invoke('account_refresh'));
+  await refreshProfiles();
+}
+
+{
+  document.querySelector('#openSupport').classList.remove('hidden');
+  document.querySelector('#openAccount').classList.remove('hidden');
+  document.querySelector('#openAccount').onclick = async () => {
+    document.querySelector('#accountModal').classList.remove('hidden');
+    try { renderAccount(await invoke('account_view')); } catch (error) { document.querySelector('#accountStatus').textContent = String(error); }
+  };
+  if (!isWindows) {
+    document.querySelector('#accountContact').classList.remove('hidden');
+    document.querySelector('#accountSignup').onclick = () => accountAction(document.querySelector('#accountSignup'), () => invoke('open_account_page', { kind: 'signup' }));
+    document.querySelector('#accountContact').onclick = () => accountAction(document.querySelector('#accountContact'), () => invoke('open_account_page', { kind: 'contact' }));
+    document.querySelector('#accountRegister').onclick = () => accountAction(document.querySelector('#accountRegister'), async () => { renderAccount(await invoke('account_register_device')); await refreshProfiles(); });
+  }
+  document.querySelector('#closeAccount').onclick = () => document.querySelector('#accountModal').classList.add('hidden');
+  document.querySelector('#accountForm').onsubmit = event => {
+    event.preventDefault();
+    const password = document.querySelector('#accountPassword').value;
+    document.querySelector('#accountPassword').value = '';
+    accountAction(document.querySelector('#accountSignIn'), async () => {
+      renderAccount(await invoke('account_login', { base: document.querySelector('#accountBase').value, login: document.querySelector('#accountLogin').value, password }));
+      await refreshProfiles();
+    });
+  };
+  document.querySelector('#accountRefresh').onclick = () => accountAction(document.querySelector('#accountRefresh'), refreshAccount);
+  document.querySelector('#accountLogout').onclick = () => accountAction(document.querySelector('#accountLogout'), async () => { supportEpoch++; document.querySelector('#billingModal').classList.add('hidden'); supportDrafts.clear(); renderAccount(await invoke('account_logout')); supportConversation = null; document.querySelector('#supportModal').classList.add('hidden'); document.querySelector('#supportMessages').replaceChildren(); document.querySelector('#supportList').replaceChildren(); document.querySelector('#supportCreate').reset(); document.querySelector('#supportReplyText').value = ''; await refreshProfiles(); });
+  invoke('account_view').then(view => { renderAccount(view); if (view.signed_in) return refreshAccount(); }).catch(error => { document.querySelector('#accountStatus').textContent = String(error); });
+  setInterval(() => { if (accountView?.signed_in && !accountUpdating) accountAction(document.querySelector('#accountRefresh'), refreshAccount); }, 30_000);
+  document.querySelector('#openSupport').onclick = () => {
+    if (!accountView?.signed_in) { document.querySelector('#openAccount').click(); return; }
+    document.querySelector('#supportModal').classList.remove('hidden'); supportWork(loadSupportList);
+  };
+  document.querySelector('#closeSupport').onclick = () => document.querySelector('#supportModal').classList.add('hidden');
+  document.querySelector('#supportBack').onclick = () => supportWork(loadSupportList);
+  document.querySelector('#supportCreate').onsubmit = event => { event.preventDefault(); supportWork(async () => {
+    showSupportConversation(await supportInvoke('support_create', { subject: document.querySelector('#supportSubject').value, text: document.querySelector('#supportText').value }));
+    document.querySelector('#supportCreate').reset();
+  }); };
+  document.querySelector('#supportReplyText').oninput = event => { if (supportConversation) supportDrafts.set(supportConversation.ticket.id, event.target.value); };
+  document.querySelector('#supportReplyForm').onsubmit = event => { event.preventDefault(); if (!supportConversation) return; supportWork(async () => {
+    const id = supportConversation.ticket.id;
+    const input = document.querySelector('#supportReplyText');
+    const text = input.value;
+    const updated = await supportInvoke('support_reply', { id, text });
+    showSupportConversation(updated, true);
+    if (input.value === text) { input.value = ''; supportDrafts.delete(id); }
+  }); };
+  document.querySelector('#supportOlder').onclick = () => { if (!supportConversation?.messages.length) return; supportWork(async () => {
+    const page = await supportInvoke('support_ticket', { id: supportConversation.ticket.id, before: supportConversation.messages[0].id });
+    showSupportConversation({ ...page, messages: [...page.messages, ...supportConversation.messages] });
+  }); };
+  setInterval(() => {
+    if (!document.hidden && !document.querySelector('#supportModal').classList.contains('hidden') && !supportBusy) supportWork(async () => {
+      if (supportConversation) showSupportConversation(await supportInvoke('support_ticket', { id: supportConversation.ticket.id, before: null }), true);
+      else await loadSupportList();
+    }, true);
+  }, 3_000);
+}
+
+async function supportWork(job, quiet = false) {
+  if (supportBusy) return;
+  supportBusy = true;
+  const status = document.querySelector('#supportStatus'); if (!quiet) status.textContent = 'Подождите…';
+  if (!quiet) document.querySelectorAll('#supportModal button').forEach(button => { button.disabled = true; });
+  try { await job(); status.textContent = ''; }
+  catch (error) { status.textContent = String(error); }
+  finally { supportBusy = false; document.querySelectorAll('#supportModal button').forEach(button => { button.disabled = false; }); }
+}
+async function loadSupportList() {
+  const tickets = await supportInvoke('support_tickets'); supportConversation = null;
+  document.querySelector('#supportConversation').classList.add('hidden');
+  document.querySelector('#supportCreate').classList.remove('hidden');
+  const list = document.querySelector('#supportList'); list.classList.remove('hidden'); list.replaceChildren();
+  for (const ticket of tickets) {
+    const button = document.createElement('button'); button.type = 'button'; button.className = 'secondary-button support-ticket';
+    button.textContent = `${ticket.unread_count ? '● ' : ''}${ticket.subject} · ${ticket.status === 'closed' ? 'закрыто' : 'открыто'}`;
+    button.onclick = () => supportWork(async () => { showSupportConversation(await supportInvoke('support_ticket', { id: ticket.id, before: null })); }); list.append(button);
+  }
+}
+function showSupportConversation(detail, merge = false) {
+  const previous = supportConversation;
+  if (merge && previous?.ticket.id === detail.ticket.id) {
+    const older = previous.messages.length && detail.messages.length && previous.messages[0].id < detail.messages[0].id;
+    detail = { ...detail, messages: [...new Map([...previous.messages, ...detail.messages].map(item => [item.id,item])).values()].sort((a,b) => a.id-b.id), has_more: older ? previous.has_more : detail.has_more };
+  }
+  if (previous?.ticket.id !== detail.ticket.id) document.querySelector('#supportReplyText').value = supportDrafts.get(detail.ticket.id) || '';
+  supportConversation = detail;
+  document.querySelector('#supportList').classList.add('hidden'); document.querySelector('#supportCreate').classList.add('hidden'); document.querySelector('#supportConversation').classList.remove('hidden');
+  document.querySelector('#supportConversationTitle').textContent = detail.ticket.subject;
+  document.querySelector('#supportOlder').classList.toggle('hidden', !detail.has_more);
+  const messages = document.querySelector('#supportMessages');
+  if (previous?.ticket.id === detail.ticket.id && previous.messages.length === detail.messages.length && previous.messages.every((item,i) => item.id === detail.messages[i].id)) return;
+  const position = messages.scrollTop; const height = messages.scrollHeight;
+  const atBottom = height - messages.clientHeight - position < 80;
+  messages.replaceChildren();
+  for (const item of detail.messages) {
+    const article = document.createElement('article'); article.className = `support-message ${item.author}`;
+    const label = document.createElement('small'); label.textContent = `${item.author === 'admin' ? 'Администрация' : 'Вы'} · ${new Date(item.created_at * 1000).toLocaleString('ru-RU')}`;
+    const text = document.createElement('p'); text.textContent = item.text; article.append(label, text); messages.append(article);
+  }
+  const prepended = previous?.ticket.id === detail.ticket.id && previous.messages.length && detail.messages[0]?.id < previous.messages[0].id;
+  messages.scrollTop = previous?.ticket.id !== detail.ticket.id ? messages.scrollHeight : prepended ? position + messages.scrollHeight - height : atBottom ? messages.scrollHeight : position;
+}
 
 elements.protocolSelector.classList.remove("hidden");
 if (isWindows) {
@@ -114,37 +277,47 @@ function connectionProfile() {
 
 function renderProfiles() {
   if (!profiles.length) {
-    elements.profiles.innerHTML = '<div class="profiles-empty">Здесь появятся ваши серверы.<br>Добавьте первую конфигурацию.</div>';
+    elements.profiles.innerHTML = '<div class="profiles-empty">Здесь появятся доступные серверы.<br>Войдите в аккаунт или добавьте старый ключ.</div>';
   } else {
-    elements.profiles.innerHTML = profiles.map((profile) => `
-      <button class="profile-card ${profile.id === selectedId ? "selected" : ""}" data-profile-id="${escapeHtml(profile.id)}">
-        <span class="profile-indicator"></span>
-        <span class="profile-copy">
-          <strong>${escapeHtml(profile.name)}</strong>
-          <span>${escapeHtml(profile.endpoint)}</span>
-        </span>
-        <span class="delete-profile" data-delete-id="${escapeHtml(profile.id)}" role="button" aria-label="Удалить профиль">×</span>
-      </button>
+    const groups = [
+      { title: "По подписке", items: profiles.filter(profile => profile.managedUser) },
+      { title: "Личные ключи", items: profiles.filter(profile => !profile.managedUser) },
+    ];
+    elements.profiles.innerHTML = groups.filter(group => group.items.length).map(group => `
+      <div class="profile-group-label">${group.title}</div>
+      ${group.items.map(profile => `
+        <div class="profile-row">
+          <button class="profile-card ${profile.id === selectedId ? "selected" : ""}" data-profile-id="${escapeHtml(profile.id)}" aria-pressed="${profile.id === selectedId}" title="${escapeHtml(profile.name)}">
+            <span class="profile-indicator"></span><span class="profile-copy"><strong>${escapeHtml(profile.name)}</strong><small>${escapeHtml(serverLoad(profile))}</small></span>
+            <span class="profile-check" aria-hidden="true">${profile.id === selectedId ? "✓" : ""}</span>
+          </button>
+          ${profile.managedUser ? "" : `<button class="delete-profile" data-delete-id="${escapeHtml(profile.id)}" aria-label="Удалить профиль ${escapeHtml(profile.name)}" title="Удалить профиль">×</button>`}
+        </div>`).join("")}
     `).join("");
   }
   renderActiveProfile();
 }
 
 function renderActiveProfile() {
+  for (const button of document.querySelectorAll('[data-profile-id]')) {
+    const label = button.querySelector('.profile-copy small');
+    if (label) label.textContent = serverLoad(profiles.find(p => p.id === button.dataset.profileId));
+  }
   const profile = selectedProfile();
   const active = connectionProfile();
   elements.activeName.textContent = profile?.name ?? "Нет конфигураций";
-  elements.activeEndpoint.textContent = profile?.endpoint ?? "Добавьте первый профиль";
+  elements.activeEndpoint.textContent = profile?.managedUser ? serverLoad(profile) : (profile ? "Личный ключ" : "Войдите в аккаунт или добавьте ключ");
   elements.serverValue.textContent = active
-    ? `${active.name} · ${active.endpoint}`
-    : (profile?.name ?? "—");
-  elements.power.disabled = !profile || ["connecting", "disconnecting"].includes(connection.state);
+    ? active.endpoint
+    : (profile?.endpoint ?? "—");
+  elements.power.disabled = connection.state === "disconnecting" || (!profile && !["connecting", "connected"].includes(connection.state));
+  elements.power.setAttribute("aria-label", connection.state === "connecting" ? "Отменить подключение" : connection.state === "connected" ? "Отключить VPN" : "Включить VPN");
   elements.reliabilityDiagnostics.disabled = !profile;
 
-  const showConnection = active && ["connecting", "connected", "disconnecting"].includes(connection.state);
+  const showConnection = active && active.id !== selectedId && ["connecting", "connected", "disconnecting"].includes(connection.state);
   elements.connectedServer.classList.toggle("hidden", !showConnection);
   elements.connectedServerName.textContent = active?.name ?? "—";
-  elements.connectedServerEndpoint.textContent = active?.endpoint ?? "—";
+  elements.connectedServerEndpoint.textContent = "Отключите VPN, чтобы подключиться к выбранному серверу";
   renderProtocol();
 }
 
@@ -152,16 +325,18 @@ function renderProtocol() {
   const profile = selectedProfile();
   const protocol = profile?.protocol ?? "legacy";
   const descriptions = {
-    legacy: "Обычный MouseVPN для старых клиентов",
+    legacy: "Совместимость с серверами старого формата",
     speedy: "Минимальная маскировка без дополнений и задержек. Нужен сервер с поддержкой Speedy.",
-    morph_quiet: "Меняющийся тег и лёгкое случайное дополнение",
-    morph_balanced: "Пятисекундная ротация и 1–2 маскирующих пакета",
-    morph_paranoid: "Секундная ротация и 3–5 маскирующих пакетов",
+    morph_quiet: "Лёгкая маскировка и меньше дополнительного трафика",
+    morph_balanced: "Баланс маскировки и расхода трафика",
+    morph_paranoid: "Больше маскировки и дополнительного трафика",
   };
   elements.protocolMode.value = protocol;
   elements.protocolMode.disabled = !profile
     || ["connecting", "connected", "disconnecting"].includes(connection.state);
-  elements.protocolHint.textContent = descriptions[protocol] ?? descriptions.legacy;
+  elements.protocolHint.textContent = ["connecting", "connected", "disconnecting"].includes(connection.state)
+    ? "Чтобы сменить режим, сначала отключите VPN"
+    : (descriptions[protocol] ?? descriptions.legacy);
 }
 
 function formatObservedTime(seconds) {
@@ -236,12 +411,13 @@ function renderConnection(next) {
     disconnecting: "Отключение…",
     error: "Не удалось подключиться",
   }[next.state] ?? "MouseVPN";
-  const active = connectionProfile();
   elements.statusMessage.textContent = next.state === "disconnected"
     ? (selectedProfile() ? "Нажмите, чтобы подключиться" : "Добавьте профиль, чтобы начать работу")
-    : next.state === "connected" && active
-      ? `Подключено к «${active.name}» — ${active.endpoint}`
-      : next.message;
+    : next.state === "connected"
+      ? "Соединение защищено. Нажмите, чтобы отключить"
+      : next.state === "connecting" ? "Нажмите ещё раз, чтобы отменить подключение" : next.message;
+  document.querySelector("#connectionDetail").textContent = next.message || labels[next.state] || "—";
+  document.querySelector("#sessionTime").classList.toggle("hidden", next.state !== "connected");
   if (next.state === "connected" && previousState !== "connected") connectedAt = Date.now();
   if (next.state !== "connected") {
     connectedAt = null;
@@ -413,8 +589,7 @@ elements.protocolMode.addEventListener("change", async () => {
       id: profile.id,
       protocol: elements.protocolMode.value,
     });
-    profiles = profiles.map((item) => item.id === updated.id ? updated : item);
-    renderProfiles();
+    await refreshProfiles(updated.id);
   } catch (error) {
     renderProtocol();
     elements.protocolHint.textContent = `Не удалось сохранить режим: ${String(error)}`;
@@ -581,7 +756,7 @@ elements.autostartEnabled.addEventListener("change", async () => {
 
 elements.power.addEventListener("click", async () => {
   try {
-    const next = connection.state === "connected"
+    const next = ["connecting", "connected"].includes(connection.state)
       ? await invoke("disconnect")
       : await invoke("connect_profile", { id: selectedId });
     renderConnection(next);
@@ -592,6 +767,12 @@ elements.power.addEventListener("click", async () => {
 
 document.addEventListener("keydown", (event) => {
   if (event.key !== "Escape") return;
+  if (!document.querySelector("#billingModal").classList.contains("hidden")) { document.querySelector("#billingModal").classList.add("hidden"); return; }
+  if (!document.querySelector('#supportModal').classList.contains('hidden')) { document.querySelector('#supportModal').classList.add('hidden'); return; }
+  if (!document.querySelector('#accountModal').classList.contains('hidden')) {
+    document.querySelector('#accountModal').classList.add('hidden');
+    return;
+  }
   if (!elements.installedAppsModal.classList.contains("hidden")) {
     closeInstalledApps();
     return;
@@ -625,3 +806,47 @@ setInterval(() => {
 Promise.all([refreshProfiles(), refreshAppExclusions(), refreshAutostart(), invoke("connection_status").then(renderConnection)]).catch((error) => {
   renderConnection({ state: "error", message: String(error), profileId: null });
 });
+
+const settingsModal = document.querySelector('#settingsModal');
+document.querySelector('#openSettings').onclick = () => settingsModal.classList.remove('hidden');
+document.querySelector('#closeSettings').onclick = () => settingsModal.classList.add('hidden');
+for (const id of ['addProfile', 'reliabilityDiagnostics', 'appExclusions']) {
+  document.getElementById(id).addEventListener('click', () => settingsModal.classList.add('hidden'));
+}
+// Keep keyboard navigation inside the open dialog and restore focus on close.
+const dialogOpeners = new WeakMap();
+const dialogs = [...document.querySelectorAll('.modal-backdrop')];
+const visibleDialogs = () => dialogs.filter(dialog => !dialog.classList.contains('hidden'));
+const focusable = dialog => [...dialog.querySelectorAll('button, input, select, textarea, [tabindex="0"]')]
+  .filter(control => !control.disabled && control.getClientRects().length);
+for (const dialog of dialogs) {
+  new MutationObserver(() => {
+    document.querySelector('.app-shell').inert = visibleDialogs().length > 0;
+    if (!dialog.classList.contains('hidden')) {
+      if (!dialogOpeners.has(dialog)) {
+        dialogOpeners.set(dialog, document.activeElement);
+        (focusable(dialog)[0] || dialog).focus();
+      }
+    } else if (dialogOpeners.has(dialog)) {
+      const opener = dialogOpeners.get(dialog); dialogOpeners.delete(dialog);
+      if (!visibleDialogs().length) (opener?.getClientRects().length ? opener : document.querySelector('#openSettings')).focus();
+    }
+    document.querySelector('.app-shell').inert = visibleDialogs().length > 0;
+  }).observe(dialog, { attributes: true, attributeFilter: ['class'] });
+}
+document.addEventListener('keydown', event => {
+  if (event.key === 'Escape') settingsModal.classList.add('hidden');
+  if (event.key !== 'Tab') return;
+  const dialog = visibleDialogs().at(-1); if (!dialog) return;
+  const controls = focusable(dialog); if (!controls.length) return;
+  const first = controls[0], last = controls.at(-1);
+  if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+  else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+});
+
+function serverLoad(profile) {
+  if (!profile?.managedUser) return 'Личный ключ';
+  const server = accountView?.account?.servers?.find(s => s.id === profile.id);
+  const fresh = server?.online_updated_at && Date.now()/1000 >= server.online_updated_at && Date.now()/1000 - server.online_updated_at <= 90;
+  return fresh && Number.isInteger(server.online_devices) ? `${server.online_devices} устройств онлайн` : 'Онлайн: нет свежих данных';
+}

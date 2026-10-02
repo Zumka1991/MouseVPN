@@ -20,3 +20,9 @@ local.toml
 
 # CodeGraph index (local, rebuilt by `codegraph init`)
 .codegraph/
+
+# Generated deployment and packaging artifacts
+__pycache__/
+*.pyc
+/linux-gui/dist/
+/windows-gui/dist/

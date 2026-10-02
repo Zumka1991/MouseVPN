@@ -1,0 +1,39 @@
+[Unit]
+Description=Private relay service
+After=network-online.target docker.service relay-network.service relay-hub.service
+Wants=network-online.target
+Requires=relay-network.service
+
+[Service]
+User=relaynode
+Group=relaynode
+ExecStart=/usr/local/bin/relay-agent --config /etc/relay-node/server.toml
+Environment=RELAY_CONTROL_URL=https://mousevpn.space/vpn
+Environment=RELAY_NODE_TOKEN_FILE=/etc/relay-node/node.token
+Environment=RELAY_DEVICE_STORE=/var/lib/relay-node/devices.toml
+Environment=RELAY_TRAFFIC_STORE=/var/lib/relay-node/traffic.sqlite3
+Environment=RELAY_ADMIN_TOKEN_FILE=/etc/relay-node/local-admin.token
+Environment=MOUSEVPN_ADMIN_LISTEN=127.0.0.1:18798
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=15
+UMask=0077
+AmbientCapabilities=CAP_NET_ADMIN
+CapabilityBoundingSet=CAP_NET_ADMIN
+DeviceAllow=/dev/net/tun rw
+StateDirectory=relay-node
+StateDirectoryMode=0700
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+
+[Install]
+WantedBy=multi-user.target

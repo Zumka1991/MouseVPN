@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Управление доступом</title><link rel="stylesheet" href="admin.css"><script src="admin.js" defer></script></head>
+<body><main>
+<header><div><p class="eyebrow"><span class="brand-mark">M</span> MOUSEVPN / ADMIN</p><h1>Центр управления</h1><p>Ваши пользователи, серверы и поддержка в одном месте.</p></div><button id="refresh" hidden>↻ Обновить данные</button></header>
+<section id="loginPanel" class="card"><h2>Вход администратора</h2><form id="loginForm"><label>Токен владельца<input id="token" type="password" autocomplete="off" required></label><button>Войти</button></form></section>
+<p id="status" role="status" aria-live="polite"></p>
+<div id="workspace" hidden>
+<div class="metrics"><article class="card"><span>Пользователи</span><strong id="userCount">0</strong></article><article class="card"><span>Активные подписки</span><strong id="activeCount">0</strong></article><article class="card"><span>Заявки без оплаты</span><strong id="pendingCount">0</strong></article><article class="card"><span>Серверы на связи</span><strong id="onlineCount">0</strong></article></div>
+<section class="card network-panel"><div class="section-heading"><div><p class="eyebrow">ИНФРАСТРУКТУРА</p><h2>Активные серверы</h2></div><span class="network-note">Статус обновляется автоматически</span></div><div id="activeServers" class="server-grid"></div></section>
+<nav><button id="usersTab" class="selected">Пользователи</button><button id="serversTab">Серверы</button><button id="paymentsTab">Оплата</button><button id="ticketsTab">Тикеты и сообщения</button><button id="logout">Выйти</button></nav>
+<section id="paymentsPanel" hidden>
+<section class="card"><h2>Реквизиты для оплаты</h2><p class="muted">Пользователь переводит деньги в своём банке и отправляет заявку. Подтверждайте её только после проверки поступления на карту.</p>
+<form id="paymentDetailsForm"><label class="check"><input id="paymentEnabled" type="checkbox">Показывать реквизиты в приложениях</label><label>Банк<input id="paymentBank" maxlength="100"></label><label>Получатель<input id="paymentRecipient" maxlength="100" placeholder="Имя и отчество"></label><label>Номер карты<input id="paymentCard" inputmode="numeric" autocomplete="off" maxlength="30"></label><label>Инструкция для клиента<textarea id="paymentInstructions" maxlength="1000" rows="3" placeholder="Например: проверьте имя получателя перед переводом"></textarea></label><button>Сохранить реквизиты</button><button id="reloadPaymentDetails" type="button">Загрузить сохранённые</button></form><p class="muted">300 ₽ в месяц · от 3 месяцев · реквизиты видны только вошедшим пользователям.</p></section>
+<section class="card"><h2>Заявки на оплату <span id="paymentCount"></span></h2><p class="muted">Подтверждение добавит оплаченные месяцы к текущему сроку. Если подписка закончилась — отсчёт начнётся сегодня.</p><div id="paymentRequests"></div></section></section>
+<section id="ticketsPanel" hidden>
+  <section class="card"><h2>Обращения и сообщения</h2><p class="muted">Ответы придут пользователю прямо в приложение. Написать первым можно из карточки пользователя.</p><div id="tickets"></div></section>
+  <section id="conversation" class="card" hidden><h2 id="conversationTitle"></h2><div id="conversationMessages" class="messages"></div><button id="olderMessages" hidden>Более ранние сообщения</button><form id="replyForm"><label>Ответ пользователю<textarea id="replyText" required maxlength="3000" rows="4"></textarea></label><button id="sendReply">Отправить</button><button id="closeTicket" type="button">Закрыть тикет</button></form></section>
+</section>
+<section id="usersPanel">
+<section class="card"><h2>Новый пользователь</h2><form id="userForm"><label>Логин<input id="userLogin" autocomplete="off" maxlength="254" required></label><label>Начальный пароль<input id="userPassword" type="password" autocomplete="new-password" minlength="10" required></label><button>Создать аккаунт</button></form><p class="muted">300 ₽ в месяц · минимум 3 месяца · два устройства. Сразу после создания доступны все серверы; подключение активируется после подтверждения оплаты.</p></section>
+<label class="check"><input id="pendingOnly" type="checkbox">Только заявки без оплаты</label><div id="users"></div>
+</section>
+<section id="serversPanel" hidden>
+<section class="card"><h2>Добавить сервер</h2><form id="serverForm"><label>Название<input id="serverName" required maxlength="80" placeholder="Например, Финляндия"></label><label>Адрес подключения<input id="serverEndpoint" required placeholder="IPv4:порт"></label><label>Публичный ключ сервера<input id="serverKey" required autocomplete="off"></label><input id="serverProtocol" type="hidden" value="morph_balanced"><button>Добавить</button></form><p class="muted">Режим соединения выбирает пользователь в приложении. Он может использовать разные режимы на одном сервере.</p></section>
+<section id="nodeSecret" class="card" hidden><h2>Токен нового сервера</h2><p>Сохраните его в закрытом файле на этом сервере. Повторно он не отображается.</p><textarea id="nodeToken" readonly aria-label="Токен нового сервера"></textarea><button id="hideSecret">Сохранено, скрыть</button></section>
+<div id="servers"></div>
+</section>
+</div>
+</main></body></html>

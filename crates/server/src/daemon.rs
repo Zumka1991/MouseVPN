@@ -64,6 +64,7 @@ struct RuntimeSession {
     outbound: Mutex<TunnelSender>,
     wire: WireMode,
     last_peer_log: Mutex<Option<Instant>>,
+    last_authenticated: Mutex<Instant>,
 }
 
 impl RuntimeSession {
@@ -77,6 +78,9 @@ impl RuntimeSession {
     /// entirely when roaming between networks. Without this the session stalls
     /// until the client's own idle timeout forces a fresh handshake.
     fn adopt_peer(&self, peer: SocketAddr) {
+        if let Ok(mut seen) = self.last_authenticated.lock() {
+            *seen = Instant::now();
+        }
         if self.peer() == Some(peer) {
             return;
         }
@@ -115,6 +119,25 @@ impl RuntimeSession {
 struct Sessions {
     by_id: HashMap<u64, Arc<RuntimeSession>>,
     by_address: HashMap<Ipv4Addr, Arc<RuntimeSession>>,
+}
+
+impl Sessions {
+    fn online_devices(&self) -> u32 {
+        // One tunnel address per device; reconnects replace the old session.
+        u32::try_from(
+            self.by_address
+                .values()
+                .filter(|session| {
+                    session.authorization.is_active()
+                        && session
+                            .last_authenticated
+                            .lock()
+                            .is_ok_and(|seen| seen.elapsed() <= Duration::from_secs(90))
+                })
+                .count(),
+        )
+        .unwrap_or(u32::MAX)
+    }
 }
 
 type SessionMap = Arc<RwLock<Sessions>>;
@@ -395,6 +418,12 @@ pub fn run(config: &ValidatedServerConfig) -> Result<(), ServerDaemonError> {
     let traffic = open_traffic_store()?;
     traffic.spawn_flusher(Duration::from_secs(10));
     start_admin_if_configured(config, &authorized, &traffic)?;
+    let observed_sessions = Arc::clone(&sessions);
+    crate::controller::start(
+        &authorized,
+        &encode_public_key(&config.server_public_key),
+        move || observed_sessions.read().ok().map(|s| s.online_devices()),
+    )?;
     let mut handshake_limiter = HandshakeLimiter::new(50, Duration::from_secs(60));
     let mut handshake_cache: HashMap<PublicKey, CachedHandshake> = HashMap::new();
 
@@ -744,6 +773,7 @@ fn handle_handshake(
         outbound: Mutex::new(sender),
         wire: wire.clone(),
         last_peer_log: Mutex::new(None),
+        last_authenticated: Mutex::new(Instant::now()),
     });
 
     let Ok(mut guard) = services.sessions.write() else {
@@ -979,10 +1009,12 @@ fn record_downloads(sent: usize, traffic: &[Arc<DeviceTrafficCounter>], payload_
 fn open_device_registry(
     config: &ValidatedServerConfig,
 ) -> Result<SharedDeviceRegistry, ServerDaemonError> {
-    let path = env::var_os("MOUSEVPN_DEVICE_STORE").map_or_else(
-        || PathBuf::from("/var/lib/mousevpn/devices.toml"),
-        PathBuf::from,
-    );
+    let path = env::var_os("RELAY_DEVICE_STORE")
+        .or_else(|| env::var_os("MOUSEVPN_DEVICE_STORE"))
+        .map_or_else(
+            || PathBuf::from("/var/lib/mousevpn/devices.toml"),
+            PathBuf::from,
+        );
     let seeds = config
         .clients
         .iter()
@@ -997,10 +1029,12 @@ fn open_device_registry(
 }
 
 fn open_traffic_store() -> Result<TrafficStore, ServerDaemonError> {
-    let path = env::var_os("MOUSEVPN_TRAFFIC_STORE").map_or_else(
-        || PathBuf::from("/var/lib/mousevpn/traffic.sqlite"),
-        PathBuf::from,
-    );
+    let path = env::var_os("RELAY_TRAFFIC_STORE")
+        .or_else(|| env::var_os("MOUSEVPN_TRAFFIC_STORE"))
+        .map_or_else(
+            || PathBuf::from("/var/lib/mousevpn/traffic.sqlite"),
+            PathBuf::from,
+        );
     TrafficStore::open(path).map_err(|error| ServerDaemonError::Configuration(error.to_string()))
 }
 
@@ -1061,7 +1095,8 @@ fn load_admin_token() -> Result<Option<String>, ServerDaemonError> {
     if let Ok(token) = env::var("MOUSEVPN_ADMIN_TOKEN") {
         return Ok(Some(token));
     }
-    let path = env::var_os("MOUSEVPN_ADMIN_TOKEN_FILE")
+    let path = env::var_os("RELAY_ADMIN_TOKEN_FILE")
+        .or_else(|| env::var_os("MOUSEVPN_ADMIN_TOKEN_FILE"))
         .map_or_else(|| PathBuf::from("/etc/mousevpn/admin.token"), PathBuf::from);
     if !path.exists() {
         return Ok(None);
@@ -1233,6 +1268,16 @@ mod session_isolation_tests {
         assert!(Arc::ptr_eq(&guard.by_id[&11], &victim));
         assert_eq!(guard.by_id.len(), 2);
         assert_eq!(guard.by_address.len(), 2);
+        assert_eq!(guard.online_devices(), 2);
+        *victim.last_authenticated.lock().unwrap() =
+            std::time::Instant::now() - std::time::Duration::from_secs(91);
+        assert_eq!(guard.online_devices(), 1);
+        victim.adopt_peer(peer);
+        assert_eq!(guard.online_devices(), 2);
+        registry
+            .revoke(&mousevpn_config::encode_public_key(&clients[0].public))
+            .unwrap();
+        assert_eq!(guard.online_devices(), 1);
     }
 }
 

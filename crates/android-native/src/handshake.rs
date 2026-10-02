@@ -22,12 +22,13 @@ const TIMEOUT: Duration = Duration::from_secs(10);
 /// exactly once turned a single lost packet into a failed connect.
 const RETRANSMIT: Duration = Duration::from_millis(700);
 
-pub(crate) fn negotiate(
+pub(crate) fn negotiate_cancellable(
     socket: UdpSocket,
     config: &ValidatedClientConfig,
     wire: &ClientWire,
+    mut cancelled: impl FnMut() -> Result<bool>,
 ) -> Result<(UdpTransport, TunnelDataPlane, SessionParameters)> {
-    negotiate_with_stop(socket, config, wire, None)
+    negotiate_with_stop(socket, config, wire, &mut cancelled)
 }
 
 pub(crate) fn negotiate_interruptible(
@@ -36,20 +37,22 @@ pub(crate) fn negotiate_interruptible(
     wire: &ClientWire,
     stopping: &AtomicBool,
 ) -> Result<(UdpTransport, TunnelDataPlane, SessionParameters)> {
-    negotiate_with_stop(socket, config, wire, Some(stopping))
+    negotiate_with_stop(socket, config, wire, &mut || {
+        Ok(stopping.load(Ordering::Relaxed))
+    })
 }
 
 fn negotiate_with_stop(
     socket: UdpSocket,
     config: &ValidatedClientConfig,
     wire: &ClientWire,
-    stopping: Option<&AtomicBool>,
+    cancelled: &mut dyn FnMut() -> Result<bool>,
 ) -> Result<(UdpTransport, TunnelDataPlane, SessionParameters)> {
     socket
         .connect(config.server)
         .context("UDP connect failed")?;
     let mut transport = UdpTransport::from_socket(socket, config.server)?;
-    let (plane, parameters) = renegotiate(&mut transport, config, wire, stopping)?;
+    let (plane, parameters) = renegotiate(&mut transport, config, wire, cancelled)?;
     Ok((transport, plane, parameters))
 }
 
@@ -57,7 +60,7 @@ fn renegotiate(
     transport: &mut UdpTransport,
     config: &ValidatedClientConfig,
     wire: &ClientWire,
-    stopping: Option<&AtomicBool>,
+    cancelled: &mut dyn FnMut() -> Result<bool>,
 ) -> Result<(TunnelDataPlane, SessionParameters)> {
     let mut session_bytes = [0_u8; 8];
     getrandom::fill(&mut session_bytes).context("random generator failed")?;
@@ -83,6 +86,9 @@ fn renegotiate(
 
     let started = Instant::now();
     let deadline = started + TIMEOUT;
+    if cancelled()? {
+        return Err(anyhow!("handshake cancelled"));
+    }
     send_prelude(transport, wire)?;
     let mut encoded_request = Vec::new();
     send_request(transport, wire, &request, &mut encoded_request)?;
@@ -91,7 +97,7 @@ fn renegotiate(
     let mut buffer = vec![0_u8; 65_535];
     let mut decoded = Vec::with_capacity(65_535);
     loop {
-        if stopping.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
+        if cancelled()? {
             return Err(anyhow!("handshake cancelled"));
         }
         let now = Instant::now();
@@ -103,7 +109,10 @@ fn renegotiate(
             next_retransmit = now + RETRANSMIT;
         }
 
-        let wait = next_retransmit.min(deadline).saturating_duration_since(now);
+        let wait = next_retransmit
+            .min(deadline)
+            .saturating_duration_since(now)
+            .min(Duration::from_millis(100));
         transport.set_read_timeout(Some(wait.max(Duration::from_millis(1))))?;
         let length = match transport.receive(&mut buffer) {
             Ok(length) => length,
@@ -123,6 +132,9 @@ fn renegotiate(
         }
         let (crypto, payload) = handshake.finish(response.payload)?;
         let parameters = SessionParameters::decode(&payload)?;
+        if cancelled()? {
+            return Err(anyhow!("handshake cancelled"));
+        }
         return Ok((
             TunnelDataPlane::new(session_id, usize::from(parameters.mtu), crypto),
             parameters,
@@ -177,4 +189,42 @@ pub(crate) fn bind_socket(server: SocketAddr) -> Result<UdpSocket> {
         SocketAddr::V6(_) => SocketAddr::from(([0_u16; 8], 0)),
     };
     UdpSocket::bind(local).context("UDP bind failed")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mousevpn_config::{encode_public_key, encode_secret_key, ClientConfig, ClientProtocol};
+    use mousevpn_crypto::KeyPair;
+
+    #[test]
+    fn cancellation_interrupts_a_silent_server_without_waiting_for_handshake_timeout() {
+        // Keep the peer socket open so the client waits for a reply rather than ICMP.
+        let peer = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let server_keys = KeyPair::generate().unwrap();
+        let client_keys = KeyPair::generate().unwrap();
+        let config = ClientConfig {
+            server: peer.local_addr().unwrap(),
+            server_public_key: encode_public_key(&server_keys.public),
+            client_private_key: encode_secret_key(&client_keys.secret),
+            tun_name: "cancel-test".to_owned(),
+            protocol: ClientProtocol::Legacy,
+        }
+        .validate()
+        .unwrap();
+        let wire = ClientWire::from_config(&config).unwrap();
+        let started = Instant::now();
+        let result =
+            negotiate_cancellable(bind_socket(config.server).unwrap(), &config, &wire, || {
+                Ok(started.elapsed() >= Duration::from_millis(200))
+            });
+        let Err(error) = result else {
+            panic!("cancelled handshake completed")
+        };
+        assert!(error.to_string().contains("cancelled"));
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "cancellation waited for the handshake deadline"
+        );
+    }
 }

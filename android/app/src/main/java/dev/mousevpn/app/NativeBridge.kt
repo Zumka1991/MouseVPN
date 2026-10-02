@@ -5,12 +5,15 @@ object NativeBridge {
         System.loadLibrary("mousevpn_android")
     }
 
+    external fun generateDeviceKeys(): String
+
     external fun prepare(
         service: MouseVpnService,
         endpoint: String,
         serverPublicKey: String,
         clientPrivateKey: String,
         protocol: String,
+        generation: Long,
     ): String
 
     external fun start(handle: Long, tunFd: Int): Boolean

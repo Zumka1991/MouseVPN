@@ -23,6 +23,9 @@ data class VpnProfile(
     val serverPublicKey: String,
     val clientPrivateKey: String,
     val protocol: VpnProtocol = VpnProtocol.LEGACY,
+    val accountId: String? = null,
+    val serverId: String? = null,
+    val validUntil: Long = 0,
 ) {
     fun validate(): VpnProfile {
         require(isValidEndpoint(endpoint)) { "Неверный IPv4:port" }
@@ -41,6 +44,9 @@ data class VpnProfile(
         .put("serverPublicKey", serverPublicKey)
         .put("clientPrivateKey", clientPrivateKey)
         .put("protocol", protocol.nativeValue)
+        .put("accountId", accountId)
+        .put("serverId", serverId)
+        .put("validUntil", validUntil)
         .toString()
 
     companion object {
@@ -56,6 +62,9 @@ data class VpnProfile(
                 serverPublicKey = value.getString("serverPublicKey"),
                 clientPrivateKey = value.getString("clientPrivateKey"),
                 protocol = VpnProtocol.fromStored(value.optString("protocol", "legacy")),
+                accountId = value.optString("accountId").takeIf { it.isNotBlank() && it != "null" },
+                serverId = value.optString("serverId").takeIf { it.isNotBlank() && it != "null" },
+                validUntil = value.optLong("validUntil", 0),
             ).validate()
         }
 

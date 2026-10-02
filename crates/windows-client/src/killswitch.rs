@@ -177,11 +177,7 @@ fn configure_transaction(
 /// Denies IPv4 unless it leaves through the tunnel, is the tunnel's own
 /// transport, is loopback, or is the DHCP exchange that keeps the physical link
 /// addressed.
-fn add_ipv4_filters(
-    engine: HANDLE,
-    server_ip: Ipv4Addr,
-    tunnel: u64,
-) -> Result<(), ClientError> {
+fn add_ipv4_filters(engine: HANDLE, server_ip: Ipv4Addr, tunnel: u64) -> Result<(), ClientError> {
     add_filter(
         engine,
         FWPM_LAYER_ALE_AUTH_CONNECT_V4,
@@ -253,9 +249,7 @@ fn add_ipv6_filters(engine: HANDLE) -> Result<(), ClientError> {
         "MouseVPN kill switch IPv6 loopback permit",
     )?;
     let mut link_local = FWP_V6_ADDR_AND_MASK {
-        addr: [
-            0xfe, 0x80, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        ],
+        addr: [0xfe, 0x80, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
         prefixLength: 10,
     };
     add_filter(

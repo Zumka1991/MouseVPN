@@ -299,10 +299,7 @@ fn harden_network_category() {
     });
 }
 
-fn apply_parameters(
-    tunnel: NET_LUID_LH,
-    parameters: SessionParameters,
-) -> Result<(), ClientError> {
+fn apply_parameters(tunnel: NET_LUID_LH, parameters: SessionParameters) -> Result<(), ClientError> {
     netcfg::set_tunnel_address(tunnel, parameters.client_address, parameters.prefix_len)?;
     netcfg::set_tunnel_dns(ADAPTER_NAME, parameters.dns)
 }
@@ -353,7 +350,10 @@ fn server_route_is_stale(
 ) -> bool {
     let mut total = 0_usize;
     let mut matching = 0_usize;
-    for route in routes.iter().filter(|route| is_server_route(route, server_ip)) {
+    for route in routes
+        .iter()
+        .filter(|route| is_server_route(route, server_ip))
+    {
         total += 1;
         if route.interface_index == interface_index && route.next_hop == next_hop {
             matching += 1;

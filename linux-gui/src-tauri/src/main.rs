@@ -1,69 +1,132 @@
 #![allow(clippy::needless_pass_by_value)] // Tauri IPC commands deserialize owned arguments.
 
 use std::{
-    fs::{self, DirBuilder, OpenOptions},
+    fs,
     io::{BufRead, BufReader, Write},
-    os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt},
+    os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     sync::{Arc, Mutex, OnceLock},
     thread,
 };
 
-use mousevpn_config::{load_toml, ClientConfig, ClientProtocol};
-use mousevpn_profile_cli::decrypt_profile;
-use serde::{Deserialize, Serialize};
+use mousevpn_config::ClientProtocol;
+use profiles::{create_private_dir, normalized_id, profile_path};
+use serde::Serialize;
 use tauri::{Manager, State, WindowEvent};
 use uuid::Uuid;
-use zeroize::Zeroize;
 
+mod account;
 mod helper_log;
 mod helper_runtime;
+mod profiles;
 mod reliability;
-
-#[derive(Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ProfileSummary {
-    id: String,
-    name: String,
-    endpoint: String,
-    protocol: ClientProtocol,
+#[tauri::command]
+fn open_account_page(kind: String) -> Result<(), String> {
+    let url = match kind.as_str() {
+        "signup" => "https://mousevpn.space/#request",
+        "contact" => "https://t.me/napsy13",
+        _ => return Err("Неизвестная страница".to_owned()),
+    };
+    Command::new("xdg-open")
+        .arg(url)
+        .spawn()
+        .map(|_| ())
+        .map_err(display_error)
 }
 
-#[derive(Deserialize, Serialize)]
-struct StoredProfile {
-    id: String,
-    name: String,
-    server: String,
-    server_public_key: String,
-    client_private_key: String,
-    tun_name: String,
-    #[serde(default)]
-    protocol: ClientProtocol,
+#[tauri::command]
+async fn account_view() -> Result<account::AccountView, String> {
+    tauri::async_runtime::spawn_blocking(account::view)
+        .await
+        .map_err(display_error)?
 }
 
-impl StoredProfile {
-    fn summary(&self) -> ProfileSummary {
-        ProfileSummary {
-            id: self.id.clone(),
-            name: self.name.clone(),
-            endpoint: self.server.clone(),
-            protocol: self.protocol,
-        }
-    }
+#[tauri::command]
+async fn account_login(
+    base: String,
+    login: String,
+    password: String,
+) -> Result<account::AccountView, String> {
+    tauri::async_runtime::spawn_blocking(move || account::login(base, login, password))
+        .await
+        .map_err(display_error)?
+}
 
-    fn client_config(&self) -> Result<ClientConfig, String> {
-        Ok(ClientConfig {
-            server: self
-                .server
-                .parse()
-                .map_err(|error| format!("Неверный адрес сервера: {error}"))?,
-            server_public_key: self.server_public_key.clone(),
-            client_private_key: self.client_private_key.clone(),
-            tun_name: self.tun_name.clone(),
-            protocol: self.protocol,
-        })
-    }
+#[tauri::command]
+async fn account_refresh() -> Result<account::AccountView, String> {
+    tauri::async_runtime::spawn_blocking(account::refresh)
+        .await
+        .map_err(display_error)?
+}
+
+#[tauri::command]
+async fn account_revoke_device(id: String) -> Result<account::AccountView, String> {
+    tauri::async_runtime::spawn_blocking(move || account::revoke(&id))
+        .await
+        .map_err(display_error)?
+}
+
+#[tauri::command]
+async fn account_logout() -> Result<account::AccountView, String> {
+    tauri::async_runtime::spawn_blocking(account::logout)
+        .await
+        .map_err(display_error)?
+}
+
+#[tauri::command]
+async fn billing_view() -> Result<mousevpn_account_client::BillingView, String> {
+    tauri::async_runtime::spawn_blocking(account::billing)
+        .await
+        .map_err(display_error)?
+}
+#[tauri::command]
+async fn billing_submit(
+    request: mousevpn_account_client::NewPaymentRequest,
+) -> Result<mousevpn_account_client::PaymentRequest, String> {
+    tauri::async_runtime::spawn_blocking(move || account::request_payment(request))
+        .await
+        .map_err(display_error)?
+}
+#[tauri::command]
+async fn support_tickets() -> Result<Vec<mousevpn_account_client::TicketSummary>, String> {
+    tauri::async_runtime::spawn_blocking(account::tickets)
+        .await
+        .map_err(display_error)?
+}
+#[tauri::command]
+async fn support_create(
+    subject: String,
+    text: String,
+) -> Result<mousevpn_account_client::TicketDetail, String> {
+    tauri::async_runtime::spawn_blocking(move || account::create_ticket(&subject, &text))
+        .await
+        .map_err(display_error)?
+}
+#[tauri::command]
+async fn support_ticket(
+    id: String,
+    before: Option<i64>,
+) -> Result<mousevpn_account_client::TicketDetail, String> {
+    tauri::async_runtime::spawn_blocking(move || account::ticket(&id, before))
+        .await
+        .map_err(display_error)?
+}
+#[tauri::command]
+async fn support_reply(
+    id: String,
+    text: String,
+) -> Result<mousevpn_account_client::TicketDetail, String> {
+    tauri::async_runtime::spawn_blocking(move || account::reply(&id, &text))
+        .await
+        .map_err(display_error)?
+}
+
+#[tauri::command]
+async fn account_register_device() -> Result<account::AccountView, String> {
+    tauri::async_runtime::spawn_blocking(account::register_device)
+        .await
+        .map_err(display_error)?
 }
 
 #[derive(Clone, Serialize)]
@@ -86,6 +149,7 @@ impl Default for ConnectionSnapshot {
 
 struct AppState {
     child: Mutex<Option<Child>>,
+    managed: std::sync::atomic::AtomicBool,
     snapshot: Arc<Mutex<ConnectionSnapshot>>,
     reliability: Arc<Mutex<reliability::ReliabilityMonitor>>,
 }
@@ -94,6 +158,7 @@ impl Default for AppState {
     fn default() -> Self {
         Self {
             child: Mutex::new(None),
+            managed: std::sync::atomic::AtomicBool::new(false),
             snapshot: Arc::new(Mutex::new(ConnectionSnapshot::default())),
             reliability: Arc::new(Mutex::new(reliability::ReliabilityMonitor::load())),
         }
@@ -101,103 +166,40 @@ impl Default for AppState {
 }
 
 #[tauri::command]
-fn list_profiles() -> Result<Vec<ProfileSummary>, String> {
-    let directory = profiles_dir()?;
-    if !directory.exists() {
-        return Ok(Vec::new());
-    }
-    let mut profiles = Vec::new();
-    for entry in fs::read_dir(directory).map_err(display_error)? {
-        let path = entry.map_err(display_error)?.path();
-        if path.extension().and_then(|value| value.to_str()) != Some("toml") {
-            continue;
-        }
-        let contents = fs::read_to_string(&path).map_err(display_error)?;
-        let stored: StoredProfile = toml::from_str(&contents).map_err(display_error)?;
-        profiles.push(stored.summary());
-    }
-    profiles.sort_by_key(|profile| profile.name.to_lowercase());
-    Ok(profiles)
+fn list_profiles() -> Result<Vec<profiles::ProfileSummary>, String> {
+    profiles::list()
 }
-
 #[tauri::command]
-fn import_profile(token: String, mut password: String) -> Result<ProfileSummary, String> {
-    let decrypted = decrypt_profile(token.trim(), password.as_bytes()).map_err(display_error);
-    password.zeroize();
-    let (portable_id, name, endpoint, server_public_key, client_private_key) =
-        decrypted?.into_parts();
-    let id = Uuid::parse_str(&portable_id)
-        .unwrap_or_else(|_| Uuid::new_v4())
-        .to_string();
-    let profile = StoredProfile {
-        id,
-        name: name.trim().to_owned(),
-        server: endpoint.trim().to_owned(),
-        server_public_key,
-        client_private_key,
-        tun_name: "mousevpn0".to_owned(),
-        protocol: ClientProtocol::Legacy,
-    };
-    if profile.name.is_empty() {
-        return Err("В конфигурации отсутствует название".to_owned());
-    }
-    profile.client_config()?.validate().map_err(display_error)?;
-    let directory = profiles_dir()?;
-    create_private_dir(&directory)?;
-    let path = profile_path(&profile.id)?;
-    write_private_atomic(
-        &path,
-        toml::to_string_pretty(&profile)
-            .map_err(display_error)?
-            .as_bytes(),
-    )?;
-    Ok(profile.summary())
+fn import_profile(token: String, password: String) -> Result<profiles::ProfileSummary, String> {
+    profiles::import(token, password)
 }
-
 #[tauri::command]
-fn set_profile_protocol(
+async fn set_profile_protocol(
     id: String,
     protocol: ClientProtocol,
     state: State<'_, AppState>,
-) -> Result<ProfileSummary, String> {
+) -> Result<profiles::ProfileSummary, String> {
     let id = normalized_id(&id)?;
     let snapshot = lock(&state.snapshot)?.clone();
-    if snapshot.profile_id.as_deref() == Some(id.as_str())
-        && matches!(
-            snapshot.state.as_str(),
-            "connecting" | "connected" | "disconnecting"
-        )
+    if matches!(
+        snapshot.state.as_str(),
+        "connecting" | "connected" | "disconnecting"
+    ) && (snapshot.profile_id.as_deref() == Some(&id) || profiles::is_managed(&id)?)
     {
-        return Err("Сначала отключите активный профиль".to_owned());
+        return Err("Сначала отключите VPN".to_owned());
     }
-
-    let path = profile_path(&id)?;
-    let contents = fs::read_to_string(&path).map_err(display_error)?;
-    let mut profile: StoredProfile = toml::from_str(&contents).map_err(display_error)?;
-    profile.protocol = protocol;
-    profile.client_config()?.validate().map_err(display_error)?;
-    write_private_atomic(
-        &path,
-        toml::to_string_pretty(&profile)
-            .map_err(display_error)?
-            .as_bytes(),
-    )?;
-    Ok(profile.summary())
+    tauri::async_runtime::spawn_blocking(move || profiles::set_protocol(&id, protocol))
+        .await
+        .map_err(display_error)?
 }
-
 #[tauri::command]
 fn delete_profile(id: String, state: State<'_, AppState>) -> Result<(), String> {
     let id = normalized_id(&id)?;
     let snapshot = lock(&state.snapshot)?.clone();
-    if snapshot.profile_id.as_deref() == Some(id.as_str()) && snapshot.state != "disconnected" {
-        return Err("Сначала отключите активный профиль".to_owned());
+    if snapshot.profile_id.as_deref() == Some(&id) && snapshot.state != "disconnected" {
+        return Err("Сначала отключите VPN".to_owned());
     }
-    let path = profile_path(&id)?;
-    match fs::remove_file(path) {
-        Ok(()) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => return Err(display_error(error)),
-    }
+    profiles::remove(&id)?;
     lock(&state.reliability)?.clear_profile(&id)
 }
 
@@ -205,7 +207,7 @@ fn delete_profile(id: String, state: State<'_, AppState>) -> Result<(), String> 
 fn connect_profile(id: String, state: State<'_, AppState>) -> Result<ConnectionSnapshot, String> {
     let id = normalized_id(&id)?;
     let path = profile_path(&id)?;
-    let config: ClientConfig = load_toml(&path).map_err(display_error)?;
+    let (config, managed) = profiles::connection_config(&id)?;
     let protocol = config.protocol;
     config.validate().map_err(display_error)?;
 
@@ -249,6 +251,9 @@ fn connect_profile(id: String, state: State<'_, AppState>) -> Result<ConnectionS
     thread::spawn(move || {
         read_helper_status(stderr, &shared_snapshot, &reliability, &id, protocol, log);
     });
+    state
+        .managed
+        .store(managed, std::sync::atomic::Ordering::Release);
     *child_slot = Some(child);
     Ok(snapshot)
 }
@@ -319,7 +324,18 @@ fn connection_status(state: State<'_, AppState>) -> Result<ConnectionSnapshot, S
             }
         }
     }
-    Ok(lock(&state.snapshot)?.clone())
+    drop(child_slot);
+    let snapshot = lock(&state.snapshot)?.clone();
+    if state.managed.load(std::sync::atomic::Ordering::Acquire)
+        && matches!(snapshot.state.as_str(), "connecting" | "connected")
+        && snapshot
+            .profile_id
+            .as_ref()
+            .is_some_and(|id| !account::allows_server(id))
+    {
+        return disconnect_inner(&state);
+    }
+    Ok(snapshot)
 }
 
 #[tauri::command]
@@ -380,6 +396,9 @@ fn read_helper_status(
         let Ok(mut current) = snapshot.lock() else {
             return;
         };
+        if current.profile_id.as_deref() != Some(profile_id) || current.state == "disconnecting" {
+            continue;
+        }
         if matches!(
             line.as_str(),
             "MOUSEVPN_STATE=connected" | "MOUSEVPN_STATE=reconnected"
@@ -408,50 +427,6 @@ fn read_helper_status(
     if let Some(log) = log.as_mut() {
         log.write("MOUSEVPN_STATE=helper_stderr_closed");
     }
-}
-
-fn profiles_dir() -> Result<PathBuf, String> {
-    dirs::config_dir()
-        .map(|directory| directory.join("mousevpn").join("profiles"))
-        .ok_or_else(|| "Не удалось определить каталог конфигурации пользователя".to_owned())
-}
-
-fn profile_path(id: &str) -> Result<PathBuf, String> {
-    Ok(profiles_dir()?.join(format!("{}.toml", normalized_id(id)?)))
-}
-
-fn normalized_id(id: &str) -> Result<String, String> {
-    Uuid::parse_str(id)
-        .map(|value| value.to_string())
-        .map_err(|_| "Неверный идентификатор профиля".to_owned())
-}
-
-fn create_private_dir(path: &Path) -> Result<(), String> {
-    if path.exists() {
-        return Ok(());
-    }
-    let mut builder = DirBuilder::new();
-    builder.recursive(true).mode(0o700);
-    builder.create(path).map_err(display_error)
-}
-
-fn write_private_atomic(path: &Path, contents: &[u8]) -> Result<(), String> {
-    let temporary = path.with_extension(format!("tmp-{}", Uuid::new_v4()));
-    let result = (|| {
-        let mut file = OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .mode(0o600)
-            .open(&temporary)
-            .map_err(display_error)?;
-        file.write_all(contents).map_err(display_error)?;
-        file.sync_all().map_err(display_error)?;
-        fs::rename(&temporary, path).map_err(display_error)
-    })();
-    if result.is_err() {
-        let _ = fs::remove_file(&temporary);
-    }
-    result
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> Result<std::sync::MutexGuard<'_, T>, String> {
@@ -588,6 +563,19 @@ fn run_gui() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            open_account_page,
+            account_view,
+            account_login,
+            account_refresh,
+            account_revoke_device,
+            account_logout,
+            account_register_device,
+            billing_view,
+            billing_submit,
+            support_tickets,
+            support_create,
+            support_ticket,
+            support_reply,
             list_profiles,
             import_profile,
             set_profile_protocol,

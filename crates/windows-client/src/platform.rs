@@ -64,8 +64,7 @@ pub(crate) fn materialize_wintun() -> Result<PathBuf, ClientError> {
     let destination = directory.join(format!("wintun-{WINTUN_VERSION}.dll"));
     // Comparing the length first keeps the common warm-start path from reading
     // the whole embedded library back off disk on every connection.
-    if fs::metadata(&destination)
-        .is_ok_and(|metadata| metadata.len() == WINTUN_DLL.len() as u64)
+    if fs::metadata(&destination).is_ok_and(|metadata| metadata.len() == WINTUN_DLL.len() as u64)
         && fs::read(&destination).is_ok_and(|contents| contents == WINTUN_DLL)
     {
         return Ok(destination);
@@ -96,9 +95,7 @@ fn is_elevated() -> bool {
     if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &raw mut token) } == 0 {
         return false;
     }
-    let mut elevation = TOKEN_ELEVATION {
-        TokenIsElevated: 0,
-    };
+    let mut elevation = TOKEN_ELEVATION { TokenIsElevated: 0 };
     let mut returned = 0_u32;
     let queried = unsafe {
         GetTokenInformation(

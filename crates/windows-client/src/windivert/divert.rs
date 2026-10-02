@@ -1,4 +1,4 @@
-﻿#![doc = "Moves selected applications' packets between the stack and the tunnel."]
+#![doc = "Moves selected applications' packets between the stack and the tunnel."]
 
 use std::{
     fmt::Write as _,
@@ -202,12 +202,7 @@ impl Translation {
     /// A full-tunnel session hands this MTU to the Wintun adapter and the stack
     /// sizes everything accordingly. There is no adapter here, so the limit has
     /// to be imposed on the connections themselves.
-    pub(crate) fn new(
-        physical: IpAddr,
-        tunnel: IpAddr,
-        resolver: IpAddr,
-        tunnel_mtu: u16,
-    ) -> Self {
+    pub(crate) fn new(physical: IpAddr, tunnel: IpAddr, resolver: IpAddr, tunnel_mtu: u16) -> Self {
         // IPv4 and TCP headers, twenty bytes each, come off the top.
         const HEADERS: u16 = 40;
         Self {

@@ -1,0 +1,18 @@
+# Insert inside the existing myaifriend.su block before its catch-all handle.
+redir /vpn /vpn/ 308
+handle_path /vpn/* {
+    reverse_proxy 172.18.0.1:18797 {
+        header_up X-Relay-Client-IP {remote_host}
+    }
+}
+redir /mousevpn /mousevpn/ 308
+handle_path /mousevpn/* {
+    rewrite * /site{path}
+    header {
+        X-Content-Type-Options nosniff
+        Referrer-Policy no-referrer
+        Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; object-src 'none'; frame-ancestors 'none'; base-uri 'self'"
+        Cache-Control no-cache
+    }
+    reverse_proxy 172.18.0.1:18797
+}

@@ -12,17 +12,103 @@ use std::{
     thread,
 };
 
-use mousevpn_config::{load_toml, ClientConfig, ClientProtocol};
+use mousevpn_config::{ClientConfig, ClientProtocol};
 use serde::Serialize;
 use tauri::{Manager, State};
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 
+mod account;
 mod app_exclusions;
 mod helper_log;
 mod profiles;
 mod tray;
+
+#[tauri::command]
+fn account_view() -> Result<account::AccountView, String> {
+    account::view()
+}
+
+#[tauri::command]
+async fn account_login(
+    base: String,
+    login: String,
+    password: String,
+) -> Result<account::AccountView, String> {
+    tauri::async_runtime::spawn_blocking(move || account::login(base, login, password))
+        .await
+        .map_err(display_error)?
+}
+
+#[tauri::command]
+async fn account_refresh() -> Result<account::AccountView, String> {
+    tauri::async_runtime::spawn_blocking(account::refresh)
+        .await
+        .map_err(display_error)?
+}
+
+#[tauri::command]
+async fn account_revoke_device(id: String) -> Result<account::AccountView, String> {
+    tauri::async_runtime::spawn_blocking(move || account::revoke(&id))
+        .await
+        .map_err(display_error)?
+}
+
+#[tauri::command]
+async fn account_logout() -> Result<account::AccountView, String> {
+    tauri::async_runtime::spawn_blocking(account::logout)
+        .await
+        .map_err(display_error)?
+}
+
+#[tauri::command]
+async fn billing_view() -> Result<mousevpn_account_client::BillingView, String> {
+    tauri::async_runtime::spawn_blocking(account::billing)
+        .await
+        .map_err(display_error)?
+}
+#[tauri::command]
+async fn billing_submit(
+    request: mousevpn_account_client::NewPaymentRequest,
+) -> Result<mousevpn_account_client::PaymentRequest, String> {
+    tauri::async_runtime::spawn_blocking(move || account::request_payment(request))
+        .await
+        .map_err(display_error)?
+}
+#[tauri::command]
+async fn support_tickets() -> Result<Vec<mousevpn_account_client::TicketSummary>, String> {
+    tauri::async_runtime::spawn_blocking(account::tickets)
+        .await
+        .map_err(display_error)?
+}
+#[tauri::command]
+async fn support_create(
+    subject: String,
+    text: String,
+) -> Result<mousevpn_account_client::TicketDetail, String> {
+    tauri::async_runtime::spawn_blocking(move || account::create_ticket(&subject, &text))
+        .await
+        .map_err(display_error)?
+}
+#[tauri::command]
+async fn support_ticket(
+    id: String,
+    before: Option<i64>,
+) -> Result<mousevpn_account_client::TicketDetail, String> {
+    tauri::async_runtime::spawn_blocking(move || account::ticket(&id, before))
+        .await
+        .map_err(display_error)?
+}
+#[tauri::command]
+async fn support_reply(
+    id: String,
+    text: String,
+) -> Result<mousevpn_account_client::TicketDetail, String> {
+    tauri::async_runtime::spawn_blocking(move || account::reply(&id, &text))
+        .await
+        .map_err(display_error)?
+}
 
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -251,7 +337,7 @@ pub(crate) fn connect_profile_inner(
 ) -> Result<ConnectionSnapshot, String> {
     let id = profiles::normalized_id(&id)?;
     let path = profiles::profile_path(&id)?;
-    let config: ClientConfig = load_toml(&path).map_err(display_error)?;
+    let config: ClientConfig = profiles::load_config(&path)?;
     config.validate().map_err(display_error)?;
 
     let mut child_slot = lock(&state.child)?;
@@ -462,7 +548,7 @@ fn read_helper_status(
 }
 
 fn run_helper(path: &Path) -> Result<(), String> {
-    let config: ClientConfig = load_toml(path).map_err(display_error)?;
+    let config: ClientConfig = profiles::load_config(path)?;
     let config = config.validate().map_err(display_error)?;
     let app_routing = if split_tunneling_available() {
         app_exclusions::policy()?
@@ -479,6 +565,29 @@ fn run_helper(path: &Path) -> Result<(), String> {
         let _ = std::io::stdin().read_line(&mut line);
         stdin_stopping.store(true, Ordering::Release);
     });
+    if let Some(id) = path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .filter(|id| profiles::is_managed(id).unwrap_or(false))
+    {
+        let id = id.to_owned();
+        let stopping = Arc::clone(&stopping);
+        thread::spawn(move || {
+            while !stopping.load(Ordering::Acquire) {
+                if profiles::profile_path(&id)
+                    .and_then(|path| profiles::load_config(&path))
+                    .is_err()
+                {
+                    eprintln!(
+                        "MOUSEVPN_ERROR=Подписка истекла или доступ отключён. Обновите аккаунт."
+                    );
+                    stopping.store(true, Ordering::Release);
+                    break;
+                }
+                thread::sleep(std::time::Duration::from_secs(1));
+            }
+        });
+    }
     let mut backoff = std::time::Duration::from_secs(1);
     eprintln!("MOUSEVPN_STATE=connecting");
     loop {
@@ -506,7 +615,7 @@ fn run_helper(path: &Path) -> Result<(), String> {
 }
 
 fn run_probe(path: &Path) -> Result<(), String> {
-    let config: ClientConfig = load_toml(path).map_err(display_error)?;
+    let config: ClientConfig = profiles::load_config(path)?;
     let config = config.validate().map_err(display_error)?;
     let parameters = mousevpn_windows_client::probe(&config).map_err(display_error)?;
     println!(
@@ -571,6 +680,17 @@ fn run_gui(minimized: bool) {
         })
         .invoke_handler(tauri::generate_handler![
             runtime_diagnostics,
+            account_view,
+            account_login,
+            account_refresh,
+            account_revoke_device,
+            account_logout,
+            billing_view,
+            billing_submit,
+            support_tickets,
+            support_create,
+            support_ticket,
+            support_reply,
             split_tunneling_available,
             list_profiles,
             import_profile,

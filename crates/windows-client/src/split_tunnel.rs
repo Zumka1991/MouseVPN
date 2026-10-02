@@ -169,8 +169,9 @@ fn spawn_outbound(
                                 // An application may emit a packet larger than
                                 // the tunnel can carry. Dropping one packet is
                                 // recoverable; stopping is not.
-                                DataPlaneError::PacketExceedsMtu { .. }
-                                | DataPlaneError::Ip(_) => Skip,
+                                DataPlaneError::PacketExceedsMtu { .. } | DataPlaneError::Ip(_) => {
+                                    Skip
+                                }
                                 error => Fatal(error.into()),
                             })
                     });
@@ -492,7 +493,10 @@ impl Drop for DnsGuard {
         // break name resolution on a machine that is no longer connected, so a
         // failure here is worth reporting loudly.
         if let Err(error) = netcfg::reset_tunnel_dns(&self.alias) {
-            eprintln!("MOUSEVPN_RUNTIME_WARNING=failed to restore DNS on {}: {error}", self.alias);
+            eprintln!(
+                "MOUSEVPN_RUNTIME_WARNING=failed to restore DNS on {}: {error}",
+                self.alias
+            );
         }
     }
 }

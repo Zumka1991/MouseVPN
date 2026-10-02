@@ -1,6 +1,6 @@
 {
   "productName": "MouseVPN",
-  "version": "0.1.11",
+  "version": "0.2.2",
   "identifier": "dev.mousevpn.linux",
   "build": {
     "frontendDist": "../ui"
@@ -10,10 +10,10 @@
     "windows": [
       {
         "title": "MouseVPN",
-        "width": 1120,
-        "height": 720,
-        "minWidth": 900,
-        "minHeight": 620,
+        "width": 960,
+        "height": 680,
+        "minWidth": 720,
+        "minHeight": 560,
         "center": true,
         "resizable": true
       }

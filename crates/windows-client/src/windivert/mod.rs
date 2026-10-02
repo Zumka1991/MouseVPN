@@ -1,4 +1,4 @@
-﻿#![doc = "Dynamic bindings to the vendored `WinDivert` 2.2 user-mode library."]
+#![doc = "Dynamic bindings to the vendored `WinDivert` 2.2 user-mode library."]
 
 pub(crate) mod divert;
 pub(crate) mod flow;
@@ -210,7 +210,6 @@ impl Address {
             unsafe { ptr::read_unaligned(self.payload.as_ptr().cast::<FlowData>()) }
         })
     }
-
 }
 
 /// The loaded `WinDivert.dll` and the entry points `MouseVPN` uses.
@@ -509,9 +508,8 @@ impl Handle {
     ///
     /// Returns [`ClientError::Platform`] when the injection is rejected.
     pub(crate) fn send(&self, packet: &[u8], address: &Address) -> Result<usize, ClientError> {
-        let length = u32::try_from(packet.len()).map_err(|_| {
-            ClientError::Platform("packet is too large for WinDivert".to_owned())
-        })?;
+        let length = u32::try_from(packet.len())
+            .map_err(|_| ClientError::Platform("packet is too large for WinDivert".to_owned()))?;
         let mut sent = 0_u32;
         // SAFETY: the packet and address outlive the call.
         let ok = unsafe {
@@ -557,8 +555,7 @@ impl Handle {
         const ERROR_NO_DATA: i32 = 232;
         let capacity = u32::try_from(packets.len()).unwrap_or(u32::MAX);
         let mut received = 0_u32;
-        let mut address_bytes =
-            u32::try_from(std::mem::size_of_val(addresses)).unwrap_or(u32::MAX);
+        let mut address_bytes = u32::try_from(std::mem::size_of_val(addresses)).unwrap_or(u32::MAX);
         // SAFETY: both buffers outlive the call and their lengths are passed
         // exactly as measured. A null overlapped pointer asks for a blocking
         // receive, which is what this loop wants.

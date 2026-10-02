@@ -11,6 +11,7 @@ internal fun View.applySystemBarPadding(
     topDp: Int,
     endDp: Int,
     bottomDp: Int,
+    includeKeyboard: Boolean = false,
 ) {
     val density = resources.displayMetrics.density
     fun Int.dp() = (this * density).toInt()
@@ -21,7 +22,8 @@ internal fun View.applySystemBarPadding(
         val right: Int
         val bottom: Int
         if (Build.VERSION.SDK_INT >= 30) {
-            val bars = windowInsets.getInsets(WindowInsets.Type.systemBars())
+            val types = WindowInsets.Type.systemBars() or if (includeKeyboard) WindowInsets.Type.ime() else 0
+            val bars = windowInsets.getInsets(types)
             left = bars.left
             top = bars.top
             right = bars.right

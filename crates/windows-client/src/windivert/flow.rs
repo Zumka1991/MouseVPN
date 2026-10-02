@@ -1,4 +1,4 @@
-﻿#![doc = "Tracks which process owns each network flow, using the `WinDivert` flow layer."]
+#![doc = "Tracks which process owns each network flow, using the `WinDivert` flow layer."]
 
 use std::{
     collections::HashMap,
@@ -14,8 +14,7 @@ use std::{
 use windows_sys::Win32::{
     Foundation::{CloseHandle, FILETIME, HANDLE},
     System::Threading::{
-        GetProcessTimes, OpenProcess, QueryFullProcessImageNameW,
-        PROCESS_QUERY_LIMITED_INFORMATION,
+        GetProcessTimes, OpenProcess, QueryFullProcessImageNameW, PROCESS_QUERY_LIMITED_INFORMATION,
     },
 };
 
@@ -525,9 +524,8 @@ impl Process {
                 &raw mut ignored[2],
             )
         };
-        (ok != 0).then(|| {
-            u64::from(creation.dwHighDateTime) << 32 | u64::from(creation.dwLowDateTime)
-        })
+        (ok != 0)
+            .then(|| u64::from(creation.dwHighDateTime) << 32 | u64::from(creation.dwLowDateTime))
     }
 
     /// Resolves the executable backing the process.

@@ -1,0 +1,27 @@
+# Dedicated fresh VPS; no Docker or existing VPN rules are present there.
+table inet relay_center {
+    chain input {
+        type filter hook input priority filter; policy drop;
+        iifname "lo" accept
+        ct state established,related accept
+        ct state invalid drop
+        meta l4proto { icmp, ipv6-icmp } accept
+        tcp dport { 22, 80, 443 } accept
+        udp dport { 443, 51820 } accept
+    }
+    chain forward {
+        type filter hook forward priority filter; policy drop;
+        ct state invalid drop
+        iifname "relay0" oifname "ens3" ip saddr 10.79.0.0/24 accept
+        iifname "ens3" oifname "relay0" ip daddr 10.79.0.0/24 ct state established,related accept
+    }
+    chain postrouting {
+        type nat hook postrouting priority srcnat; policy accept;
+        oifname "ens3" ip saddr 10.79.0.0/24 masquerade
+    }
+    chain mangle {
+        type filter hook forward priority mangle; policy accept;
+        iifname "relay0" tcp flags syn / syn,rst tcp option maxseg size set rt mtu
+        oifname "relay0" tcp flags syn / syn,rst tcp option maxseg size set rt mtu
+    }
+}

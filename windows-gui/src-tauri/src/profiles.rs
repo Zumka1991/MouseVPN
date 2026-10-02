@@ -17,6 +17,8 @@ pub(crate) struct ProfileSummary {
     name: String,
     endpoint: String,
     protocol: ClientProtocol,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    managed_user: Option<String>,
 }
 
 impl ProfileSummary {
@@ -35,6 +37,8 @@ struct StoredProfile {
     tun_name: String,
     #[serde(default)]
     protocol: ClientProtocol,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    managed_user: Option<String>,
 }
 
 impl StoredProfile {
@@ -44,6 +48,7 @@ impl StoredProfile {
             name: self.name.clone(),
             endpoint: self.server.clone(),
             protocol: self.protocol,
+            managed_user: self.managed_user.clone(),
         }
     }
 
@@ -54,7 +59,11 @@ impl StoredProfile {
                 .parse()
                 .map_err(|error| format!("Неверный адрес сервера: {error}"))?,
             server_public_key: self.server_public_key.clone(),
-            client_private_key: self.client_private_key.clone(),
+            client_private_key: if let Some(user) = &self.managed_user {
+                super::account::private_key(user, &self.id)?
+            } else {
+                self.client_private_key.clone()
+            },
             tun_name: self.tun_name.clone(),
             protocol: self.protocol,
         })
@@ -96,6 +105,7 @@ pub(crate) fn import(token: String, mut password: String) -> Result<ProfileSumma
         client_private_key,
         tun_name: "MouseVPN".to_owned(),
         protocol: ClientProtocol::Legacy,
+        managed_user: None,
     };
     if profile.name.is_empty() {
         return Err("В конфигурации отсутствует название".to_owned());
@@ -151,7 +161,7 @@ fn profiles_dir() -> Result<PathBuf, String> {
         .ok_or_else(|| "Не удалось определить каталог конфигурации пользователя".to_owned())
 }
 
-fn write_atomic(path: &Path, contents: &[u8]) -> Result<(), String> {
+pub(crate) fn write_atomic(path: &Path, contents: &[u8]) -> Result<(), String> {
     let temporary = path.with_extension(format!("tmp-{}", Uuid::new_v4()));
     let result = (|| {
         let mut file = OpenOptions::new()
@@ -167,6 +177,92 @@ fn write_atomic(path: &Path, contents: &[u8]) -> Result<(), String> {
         let _ = fs::remove_file(temporary);
     }
     result
+}
+
+pub(crate) fn load_config(path: &Path) -> Result<ClientConfig, String> {
+    let contents = fs::read_to_string(path).map_err(display_error)?;
+    if let Ok(profile) = toml::from_str::<StoredProfile>(&contents) {
+        return profile.client_config();
+    }
+    toml::from_str(&contents).map_err(display_error)
+}
+
+pub(crate) fn is_managed(id: &str) -> Result<bool, String> {
+    let value: StoredProfile =
+        toml::from_str(&fs::read_to_string(profile_path(id)?).map_err(display_error)?)
+            .map_err(display_error)?;
+    Ok(value.managed_user.is_some())
+}
+
+pub(crate) fn replace_managed(
+    account: Option<&mousevpn_account_client::Account>,
+) -> Result<(), String> {
+    let directory = profiles_dir()?;
+    fs::create_dir_all(&directory).map_err(display_error)?;
+    for entry in fs::read_dir(&directory).map_err(display_error)? {
+        let path = entry.map_err(display_error)?.path();
+        if path.extension().and_then(|value| value.to_str()) != Some("toml") {
+            continue;
+        }
+        let previous: StoredProfile =
+            toml::from_str(&fs::read_to_string(&path).map_err(display_error)?)
+                .map_err(display_error)?;
+        if previous.managed_user.is_some()
+            && !account.is_some_and(|account| {
+                previous.managed_user.as_deref() == Some(&account.id)
+                    && account
+                        .servers
+                        .iter()
+                        .any(|server| server.id == previous.id)
+            })
+        {
+            fs::remove_file(path).map_err(display_error)?;
+        }
+    }
+    if let Some(account) = account {
+        for server in &account.servers {
+            let path = profile_path(&server.id)?;
+            let previous = fs::read_to_string(&path)
+                .ok()
+                .and_then(|value| toml::from_str::<StoredProfile>(&value).ok());
+            if previous
+                .as_ref()
+                .is_some_and(|profile| profile.managed_user.is_none())
+            {
+                return Err("Профиль сервера совпал с существующим личным профилем".to_owned());
+            }
+            let protocol = previous
+                .as_ref()
+                .filter(|profile| profile.managed_user.as_deref() == Some(&account.id))
+                .map_or_else(
+                    || match server.protocol.as_str() {
+                        "morph_quiet" => ClientProtocol::MorphQuiet,
+                        "morph_balanced" => ClientProtocol::MorphBalanced,
+                        "morph_paranoid" => ClientProtocol::MorphParanoid,
+                        _ => ClientProtocol::Legacy,
+                    },
+                    |profile| profile.protocol,
+                );
+            let profile = StoredProfile {
+                id: server.id.clone(),
+                name: server.name.clone(),
+                server: server.endpoint.clone(),
+                server_public_key: server.public_key.clone(),
+                client_private_key: String::new(),
+                tun_name: "MouseVPN".to_owned(),
+                protocol,
+                managed_user: Some(account.id.clone()),
+            };
+            profile.client_config()?.validate().map_err(display_error)?;
+            write_atomic(
+                &path,
+                toml::to_string_pretty(&profile)
+                    .map_err(display_error)?
+                    .as_bytes(),
+            )?;
+        }
+    }
+    Ok(())
 }
 
 fn display_error(error: impl std::fmt::Display) -> String {

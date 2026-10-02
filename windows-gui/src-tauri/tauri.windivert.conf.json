@@ -3,7 +3,8 @@
     "resources": {
       "../../crates/windows-client/vendor/windivert/WinDivert.dll": "WinDivert.dll",
       "../../crates/windows-client/vendor/windivert/WinDivert64.sys": "WinDivert64.sys",
-      "../../crates/windows-client/vendor/windivert/LICENSE.txt": "WinDivert-LICENSE.txt"
+      "../../crates/windows-client/vendor/windivert/LICENSE.txt": "WinDivert-LICENSE.txt",
+      "../../crates/windows-client/vendor/windivert/README.md": "WinDivert-README.md"
     }
   }
 }

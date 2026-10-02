@@ -8,6 +8,7 @@ rust-version.workspace = true
 [dependencies]
 axum = "0.8.9"
 mousevpn-config = { path = "../config" }
+mousevpn-account-client = { path = "../account-client" }
 mousevpn-crypto = { path = "../crypto" }
 mousevpn-profile-cli = { path = "../profile-cli" }
 rusqlite = { version = "0.32", features = ["bundled"] }

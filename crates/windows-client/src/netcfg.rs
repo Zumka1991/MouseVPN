@@ -14,12 +14,12 @@ use windows_sys::Win32::{
     NetworkManagement::{
         IpHelper::{
             ConvertInterfaceAliasToLuid, ConvertInterfaceLuidToAlias, ConvertInterfaceLuidToIndex,
-            CreateIpForwardEntry2,
-            CreateUnicastIpAddressEntry, DeleteIpForwardEntry2, DeleteUnicastIpAddressEntry,
-            FreeMibTable, GetBestRoute2, GetIpForwardTable2, GetIpInterfaceEntry,
-            GetUnicastIpAddressTable, InitializeIpForwardEntry, InitializeUnicastIpAddressEntry,
-            SetIpInterfaceEntry, MIB_IPFORWARD_ROW2, MIB_IPFORWARD_TABLE2, MIB_IPINTERFACE_ROW,
-            MIB_UNICASTIPADDRESS_ROW, MIB_UNICASTIPADDRESS_TABLE,
+            CreateIpForwardEntry2, CreateUnicastIpAddressEntry, DeleteIpForwardEntry2,
+            DeleteUnicastIpAddressEntry, FreeMibTable, GetBestRoute2, GetIpForwardTable2,
+            GetIpInterfaceEntry, GetUnicastIpAddressTable, InitializeIpForwardEntry,
+            InitializeUnicastIpAddressEntry, SetIpInterfaceEntry, MIB_IPFORWARD_ROW2,
+            MIB_IPFORWARD_TABLE2, MIB_IPINTERFACE_ROW, MIB_UNICASTIPADDRESS_ROW,
+            MIB_UNICASTIPADDRESS_TABLE,
         },
         Ndis::NET_LUID_LH,
     },
@@ -127,9 +127,8 @@ pub(crate) fn interface_alias(luid: NET_LUID_LH) -> Result<String, ClientError> 
     // NDIS_IF_MAX_STRING_SIZE plus the terminator, which Windows documents as
     // enough for any interface alias.
     let mut buffer = [0_u16; 257];
-    let status = unsafe {
-        ConvertInterfaceLuidToAlias(&raw const luid, buffer.as_mut_ptr(), buffer.len())
-    };
+    let status =
+        unsafe { ConvertInterfaceLuidToAlias(&raw const luid, buffer.as_mut_ptr(), buffer.len()) };
     if status != ERROR_SUCCESS {
         return Err(win32_error("resolve the interface name", status));
     }
@@ -648,19 +647,27 @@ fn win32_error(operation: &str, code: u32) -> ClientError {
 
 #[cfg(test)]
 mod tests {
-    use super::{ipv4_from_sockaddr, ipv6_from_sockaddr, is_link_local_v6, sockaddr_v4, sockaddr_v6};
+    use super::{
+        ipv4_from_sockaddr, ipv6_from_sockaddr, is_link_local_v6, sockaddr_v4, sockaddr_v6,
+    };
     use std::net::{Ipv4Addr, Ipv6Addr};
 
     #[test]
     fn round_trips_an_ipv4_sockaddr() {
         let address = Ipv4Addr::new(10, 8, 0, 7);
-        assert_eq!(unsafe { ipv4_from_sockaddr(&sockaddr_v4(address)) }, address);
+        assert_eq!(
+            unsafe { ipv4_from_sockaddr(&sockaddr_v4(address)) },
+            address
+        );
     }
 
     #[test]
     fn round_trips_an_ipv6_sockaddr() {
         let address: Ipv6Addr = "2001:db8::1".parse().expect("address");
-        assert_eq!(unsafe { ipv6_from_sockaddr(&sockaddr_v6(address)) }, address);
+        assert_eq!(
+            unsafe { ipv6_from_sockaddr(&sockaddr_v6(address)) },
+            address
+        );
     }
 
     #[test]

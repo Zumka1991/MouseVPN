@@ -65,9 +65,6 @@ pub(crate) fn validate_devices(
     tunnel_address: Ipv4Addr,
     prefix_len: u8,
 ) -> Result<(), RegistryError> {
-    if devices.is_empty() {
-        return Err(RegistryError::new("device registry must not be empty"));
-    }
     let mask = prefix_mask(prefix_len)?;
     let network = u32::from(tunnel_address) & mask;
     let mut keys = HashSet::new();

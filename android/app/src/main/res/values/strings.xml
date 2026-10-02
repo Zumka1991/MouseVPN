@@ -1,6 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <string name="account_title">Мой аккаунт и подписка</string>
+    <string name="support_title">Поддержка и сообщения</string>
     <string name="app_name">MouseVPN</string>
+    <string name="welcome_title">Ваш VPN начинается с аккаунта</string>
+    <string name="welcome_hint">Войдите, чтобы получить свои серверы и подписку.</string>
+    <string name="login_action">Войти в аккаунт</string>
+    <string name="server_label">СЕРВЕР ПОДКЛЮЧЕНИЯ</string>
+    <string name="server_after_login">Серверы появятся после входа и активации</string>
+    <string name="subscription_server">Доступен по вашей подписке</string>
+    <string name="connection_mode_title">Режим соединения</string>
+    <string name="advanced_show">Настройки и диагностика  ↓</string>
+    <string name="advanced_hide">Скрыть настройки  ↑</string>
+    <string name="add_legacy_key">Добавить прежний ключ вручную</string>
     <string name="profile_label">Профиль</string>
     <string name="select_server">Выберите сервер</string>
     <string name="select_server_hint">Активная конфигурация используется при следующем подключении</string>
@@ -24,16 +36,16 @@
     <string name="protocol_title">Режим маскировки</string>
     <string name="protocol_legacy_hint">Обычный MouseVPN для старых клиентов</string>
     <string-array name="protocol_mode_labels">
-        <item>Legacy — совместимый</item>
-        <item>Morph Quiet — экономный</item>
-        <item>Morph Balanced — усиленный</item>
-        <item>Morph Paranoid — максимальный</item>
+        <item>Совместимый</item>
+        <item>Экономный</item>
+        <item>Сбалансированный</item>
+        <item>Усиленный</item>
     </string-array>
     <string-array name="protocol_mode_hints">
-        <item>Обычный MouseVPN для старых клиентов</item>
-        <item>Меняющийся тег и лёгкое случайное дополнение</item>
-        <item>Пятисекундная ротация и 1–2 маскирующих пакета</item>
-        <item>Секундная ротация и 3–5 маскирующих пакетов</item>
+        <item>Для прежних ключей и совместимости со старыми серверами.</item>
+        <item>Лёгкая маскировка с небольшим расходом трафика.</item>
+        <item>Баланс маскировки и расхода трафика.</item>
+        <item>Более частая смена маскировки и дополнительный трафик.</item>
     </string-array>
     <string name="plus">+</string>
     <string name="empty_value">—</string>

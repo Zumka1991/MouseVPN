@@ -12,8 +12,14 @@ android {
         applicationId = "dev.mousevpn.app"
         minSdk = 26
         targetSdk = 36
-        versionCode = 16
-        versionName = "0.1.15"
+        versionCode = 21
+        versionName = "0.2.4"
+        val accountUrl = providers.gradleProperty("accountServiceUrl").orElse("").get()
+            .replace("\\", "\\\\").replace("\"", "\\\"")
+        buildConfigField("String", "ACCOUNT_SERVICE_URL", "\"$accountUrl\"")
+        val fallbackUrl = providers.gradleProperty("accountFallbackUrl").orElse("").get()
+            .replace("\\", "\\\\").replace("\"", "\\\"")
+        buildConfigField("String", "ACCOUNT_FALLBACK_URL", "\"$fallbackUrl\"")
     }
 
     signingConfigs {
@@ -43,6 +49,7 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
     kotlinOptions.jvmTarget = "17"
+    buildFeatures { buildConfig = true }
 }
 
 val buildRust by tasks.registering(Exec::class) {

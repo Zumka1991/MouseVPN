@@ -2,7 +2,30 @@
 
 Desktop client built with Tauri 2 and the existing MouseVPN Rust runtime.
 
-## Current MVP
+## Account and subscription (0.2.0)
+
+- Sign in with the same email and password as Android. The app uses
+  `https://mousevpn.space/vpn`, with the existing fallback service for sign-in.
+- View subscription expiry and the shared two-device limit; revoke an old
+  device and register this computer without creating a new key on each login.
+- Assigned servers update automatically; removing access or expiring the
+  subscription stops an active managed connection. Server-side leases enforce
+  access independently of the desktop UI.
+- Select one protocol mode for all subscription servers. Imported legacy keys
+  retain their own mode and are preserved on sign-in and sign-out.
+- Create support tickets and read administration messages, including after
+  expiry. An open conversation refreshes every three seconds; drafts and loaded
+  older messages remain in place. The account and unread badge refresh every
+  thirty seconds while the app is running. These are foreground updates, not
+  push notifications when the application is closed.
+- Account session and device identities are stored under
+  `$XDG_CONFIG_HOME/mousevpn` (normally `~/.config/mousevpn`), in private `0600`
+  files and `0700` directories. The password is not stored. Unlike the Windows
+  DPAPI store, these files are protected by Unix file permissions, not an OS
+  keyring. Sign-out removes subscription profiles and the session, retaining
+  the device identity for a subsequent login.
+
+## VPN features
 
 - supports the optional **Speedy** protocol with minimal header masking,
   no padding or handshake cover traffic, and separate reliability history;
@@ -93,6 +116,14 @@ MOUSEVPN_BUILD_NETWORK=host MOUSEVPN_RUN_NETWORK=host ./linux-gui/build-ubuntu22
 
 The container's Cargo build defaults to four jobs; override `CARGO_BUILD_JOBS`
 to adjust memory use. Artifact names follow the version in `tauri.conf.json`.
+
+For native packaging on a configured Ubuntu/Zorin x64 build host with the
+Tauri CLI, `curl`, `dpkg-deb`, `pkg-config` and Python 3 installed, run
+`./linux-gui/build-native.sh`. It produces `.deb` and AppImage in `linux-gui/dist`,
+adds the standalone helper and records the host glibc minimum in the `.deb`.
+The published 0.2.0 native build was built and launched on Zorin OS 18.1
+(Ubuntu 24.04, glibc 2.39); it is not an Ubuntu 22.04 build. Use the Docker
+workflow above to produce a separate older-baseline build.
 
 The artifacts are written to `linux-gui/dist`. The build deliberately leaves
 Wayland client libraries out of the AppImage: they must match the host's EGL

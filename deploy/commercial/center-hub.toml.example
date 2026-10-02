@@ -1,0 +1,5 @@
+# Caddy terminates HTTPS and forwards to this local-only listener.
+listen = "127.0.0.1:18797"
+database = "/var/lib/relay-hub/accounts.sqlite3"
+admin_token_file = "/etc/relay-hub/owner.token"
+public_dir = "/var/lib/relay-hub/public"

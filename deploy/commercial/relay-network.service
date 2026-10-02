@@ -1,0 +1,14 @@
+[Unit]
+Description=Private relay forwarding
+After=network-online.target docker.service
+Before=relay-agent.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/libexec/relay-network start
+ExecStop=/usr/local/libexec/relay-network stop
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

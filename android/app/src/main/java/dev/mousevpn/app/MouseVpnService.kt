@@ -95,6 +95,11 @@ class MouseVpnService : VpnService() {
         val backoff = ReconnectBackoff()
         val initialBudget = InitialConnectBudget(MAX_INITIAL_CONNECT_ATTEMPTS)
         while (isAttemptActive(generation)) {
+            val selected = ProfileStore(this).selected()
+            if (selected?.accountId != null && !AccountManager(this).allowed(selected)) {
+                showFinalConnectionError("Подписка истекла или доступ отключён. Откройте аккаунт.", 1)
+                return
+            }
             val result = connectOnce(generation)
             if (!isAttemptActive(generation) || result.outcome == AttemptOutcome.STOPPED) {
                 return
@@ -156,6 +161,7 @@ class MouseVpnService : VpnService() {
                     profile.serverPublicKey,
                     profile.clientPrivateKey,
                     profile.protocol.nativeValue,
+                    generation,
                 ),
             )
             handle = prepared.getLong("handle")
@@ -186,7 +192,7 @@ class MouseVpnService : VpnService() {
                 runCatching { diagnostics.connected(diagnosticSessionId, underlyingNetwork) }
             }
             val summary = buildString {
-                append("Подключено: ${profile.endpoint}")
+                append("Подключено: ${if (profile.accountId != null) profile.name else profile.endpoint}")
                 if (appPolicy.second > 0) {
                     append(
                         if (appPolicy.first == AppRoutingMode.EXCLUDE) " (в обход: ${appPolicy.second})"
@@ -201,7 +207,7 @@ class MouseVpnService : VpnService() {
             val notification = VpnNotification.create(this, summary)
             getSystemService(android.app.NotificationManager::class.java)
                 .notify(VpnNotification.ID, notification)
-            return monitor(handle, connectedAt, summary)
+            return monitor(handle, connectedAt, summary, profile)
         } catch (_: InterruptedException) {
             val current = handle
             if (current != 0L) NativeBridge.stop(current)
@@ -209,6 +215,7 @@ class MouseVpnService : VpnService() {
             connectedSinceElapsedRealtime = 0L
             return AttemptResult(AttemptOutcome.STOPPED, elapsedSince(connectedAt))
         } catch (error: Exception) {
+            if (!isAttemptActive(generation)) return AttemptResult(AttemptOutcome.STOPPED, elapsedSince(connectedAt))
             val detail = connectionErrorDetail(error.message)
             finishDiagnostics(
                 "connection_error",
@@ -258,6 +265,9 @@ class MouseVpnService : VpnService() {
     private fun ensureAttemptActive(generation: Long) {
         if (!isAttemptActive(generation)) throw InterruptedException()
     }
+
+    // Called from the native handshake on the connection worker thread.
+    fun isConnectionCancelled(generation: Long): Boolean = !isAttemptActive(generation)
 
     /**
      * MTU of the network carrying the tunnel, or null when it is unknown.
@@ -310,9 +320,17 @@ class MouseVpnService : VpnService() {
         return policy.mode to applied
     }
 
-    private fun monitor(currentHandle: Long, connectedAt: Long, connectedSummary: String): AttemptResult {
+    private fun monitor(currentHandle: Long, connectedAt: Long, connectedSummary: String, profile: VpnProfile): AttemptResult {
         var reconnectingShown = false
         while (!Thread.currentThread().isInterrupted && handle == currentHandle) {
+            if (profile.accountId != null && !AccountManager(this).allowed(profile)) {
+                NativeBridge.stop(currentHandle)
+                handle = 0L
+                connectedSinceElapsedRealtime = 0L
+                finishDiagnostics("access_expired", null, currentHandle)
+                showFinalConnectionError("Подписка истекла или доступ отключён. Откройте аккаунт.", 1)
+                return AttemptResult(AttemptOutcome.STOPPED, elapsedSince(connectedAt))
+            }
             if (networkRestartRequested.getAndSet(false)) {
                 val status = "Смена сети… обновление VPN"
                 broadcast(status)

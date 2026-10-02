@@ -14,3 +14,4 @@ pub use daemon_error::ServerDaemonError;
 pub use sessions::{ActiveSession, SessionAccessError, SessionInsertError, SessionTable};
 pub use state::{ProvisionedDevice, RevokeResult, ServerState, StateError};
 pub use users::{RegistryError, User, UserId, UserRegistry};
+mod controller;

@@ -1,0 +1,11 @@
+table inet relay_node {
+  chain postrouting {
+    type nat hook postrouting priority srcnat; policy accept;
+    oifname "ens3" ip saddr 10.78.0.0/24 masquerade
+  }
+  chain forward {
+    type filter hook forward priority mangle; policy accept;
+    iifname "relay0" tcp flags syn / syn,rst tcp option maxseg size set rt mtu
+    oifname "relay0" tcp flags syn / syn,rst tcp option maxseg size set rt mtu
+  }
+}

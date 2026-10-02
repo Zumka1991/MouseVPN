@@ -1,0 +1,22 @@
+# Place inside the existing myaifriend.su site, preserving its other routes.
+redir /vpn /vpn/ 308
+handle_path /vpn/* {
+    rewrite * /vpn{path}
+    reverse_proxy https://194.113.235.216 {
+        header_up Host mousevpn.space
+        header_up X-Relay-Client-IP {remote_host}
+        transport http {
+            tls_server_name mousevpn.space
+        }
+    }
+}
+redir /mousevpn /mousevpn/ 308
+handle_path /mousevpn/* {
+    reverse_proxy https://194.113.235.216 {
+        header_up Host mousevpn.space
+        header_up X-Relay-Client-IP {remote_host}
+        transport http {
+            tls_server_name mousevpn.space
+        }
+    }
+}
