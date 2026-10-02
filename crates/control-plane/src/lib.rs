@@ -239,7 +239,7 @@ async fn login(
     app.login_limit(&login)?;
     if request.password.len() > 256 {
         request.password.zeroize();
-        return Err(ApiError::unauthorized());
+        return Err(ApiError::invalid_credentials());
     }
     let found = app.db()?.password_hash(&login)?;
     let hash = found
@@ -265,7 +265,7 @@ async fn login(
     .map_err(|_| ApiError::unauthorized())?;
     let (id, _) = found
         .filter(|_| accepted)
-        .ok_or_else(ApiError::unauthorized)?;
+        .ok_or_else(ApiError::invalid_credentials)?;
     let db = app.db()?;
     let token = db.session(&id, now())?;
     Ok(Json(LoginResponse {

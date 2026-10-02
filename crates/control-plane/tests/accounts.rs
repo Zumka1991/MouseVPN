@@ -1126,3 +1126,30 @@ async fn traffic_retries_ordering_server_isolation_revocation_and_privacy() {
         .get("connections")
         .is_none());
 }
+
+#[tokio::test]
+async fn rejected_login_explains_credentials_without_disclosing_account_existence() {
+    let (_temp, app) = setup();
+    user(&app, "login-feedback").await;
+    let expected = json!({"error":"Неверная почта или пароль. Проверьте введённые данные."});
+    for (login, password) in [
+        ("login-feedback", "wrong-password".to_owned()),
+        ("unknown-feedback", "wrong-password".to_owned()),
+        ("login-feedback", "x".repeat(257)),
+    ] {
+        let (status, body) = call(
+            &app,
+            "POST",
+            "/v1/login",
+            "",
+            json!({"login":login,"password":password}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        assert_eq!(body, expected);
+    }
+    let (status, body) = call(&app, "GET", "/v1/account", "expired-token", Value::Null).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(body, json!({"error":"Войдите в аккаунт"}));
+    login(&app, "login-feedback").await;
+}

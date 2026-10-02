@@ -14,6 +14,12 @@ impl ApiError {
     pub fn unauthorized() -> Self {
         Self(StatusCode::UNAUTHORIZED, "Войдите в аккаунт".to_owned())
     }
+    pub fn invalid_credentials() -> Self {
+        Self(
+            StatusCode::UNAUTHORIZED,
+            "Неверная почта или пароль. Проверьте введённые данные.".to_owned(),
+        )
+    }
     pub fn missing() -> Self {
         Self(StatusCode::NOT_FOUND, "Запись не найдена".to_owned())
     }
