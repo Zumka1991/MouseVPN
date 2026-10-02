@@ -52,6 +52,27 @@ CREATE TABLE IF NOT EXISTS payment_requests (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS one_pending_payment ON payment_requests(user_id) WHERE status='pending';
 CREATE INDEX IF NOT EXISTS payment_requests_user ON payment_requests(user_id,created_at);
-PRAGMA user_version=3;
+PRAGMA user_version=4;
 
 CREATE TABLE IF NOT EXISTS node_status (server_id TEXT PRIMARY KEY REFERENCES servers(id), online_devices INTEGER NOT NULL, updated_at INTEGER NOT NULL);
+
+CREATE TABLE IF NOT EXISTS device_owners (
+ public_key TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), name TEXT NOT NULL
+);
+INSERT OR IGNORE INTO device_owners SELECT public_key,user_id,name FROM devices;
+CREATE TABLE IF NOT EXISTS usage_hourly (
+ server_id TEXT NOT NULL REFERENCES servers(id), public_key TEXT NOT NULL REFERENCES device_owners(public_key),
+ hour INTEGER NOT NULL, upload_bytes INTEGER NOT NULL, download_bytes INTEGER NOT NULL,
+ PRIMARY KEY(server_id,public_key,hour)
+);
+CREATE INDEX IF NOT EXISTS usage_time ON usage_hourly(hour);
+CREATE TABLE IF NOT EXISTS connection_history (
+ server_id TEXT NOT NULL REFERENCES servers(id), id TEXT NOT NULL, public_key TEXT NOT NULL REFERENCES device_owners(public_key),
+ at INTEGER NOT NULL, protocol TEXT NOT NULL, PRIMARY KEY(server_id,id)
+);
+CREATE INDEX IF NOT EXISTS connection_time ON connection_history(at);
+CREATE TABLE IF NOT EXISTS traffic_sync (
+ server_id TEXT PRIMARY KEY REFERENCES servers(id), updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS lifetime_access (user_id TEXT PRIMARY KEY REFERENCES users(id), enabled INTEGER NOT NULL DEFAULT 0);

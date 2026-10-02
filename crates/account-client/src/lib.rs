@@ -270,6 +270,8 @@ impl AccountClient {
         )
     }
 
+    /// # Errors
+    /// Returns an error for invalid node credentials or an unavailable controller.
     pub fn snapshot(&self, token: &str) -> Result<NodeSnapshot, String> {
         Self::response(
             self.client
@@ -398,5 +400,39 @@ mod tests {
     fn https_clients_have_a_crypto_provider() {
         assert!(AccountClient::new("https://myaifriend.su/vpn").is_ok());
         assert!(AccountClient::new("https://myaifriend.su/vpn").is_ok());
+    }
+}
+
+/// Durable, absolute hourly counters; retries must not add these values again.
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub struct NodeTraffic {
+    pub hours: Vec<NodeTrafficHour>,
+    pub connections: Vec<NodeConnection>,
+}
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct NodeTrafficHour {
+    pub hour: i64,
+    pub public_key: String,
+    pub upload_bytes: i64,
+    pub download_bytes: i64,
+}
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct NodeConnection {
+    pub id: String,
+    pub at: i64,
+    pub public_key: String,
+    pub protocol: String,
+}
+impl AccountClient {
+    /// # Errors
+    /// Returns an error if the controller cannot durably accept the batch.
+    pub fn report_traffic(&self, token: &str, report: &NodeTraffic) -> Result<(), String> {
+        let _: serde_json::Value = Self::response(
+            self.client
+                .post(format!("{}/v1/node/traffic", self.base))
+                .bearer_auth(token)
+                .json(report),
+        )?;
+        Ok(())
     }
 }

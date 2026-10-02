@@ -13,6 +13,8 @@ use std::{
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 
+use mousevpn_account_client::{NodeConnection, NodeTraffic, NodeTrafficHour};
+
 const TRAFFIC_VERSION: u8 = 1;
 const SECONDS_PER_HOUR: u64 = 3_600;
 const RETENTION_HOURS: u64 = 24 * 400;
@@ -274,6 +276,101 @@ impl TrafficStore {
     }
 }
 
+impl TrafficStore {
+    /// Records an authenticated new handshake, excluding retransmissions.
+    /// # Errors
+    /// Returns a database error if the event cannot be persisted.
+    pub fn record_connection(&self, public_key: &str, protocol: &str) -> Result<(), TrafficError> {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default();
+        let db = self
+            .0
+            .database
+            .lock()
+            .map_err(|_| TrafficError::new("traffic lock poisoned"))?;
+        db.execute(
+            "INSERT OR IGNORE INTO connection_outbox VALUES(?,?,?,?)",
+            params![
+                format!("{}-{}", stamp.as_nanos(), public_key),
+                to_sql_integer(stamp.as_secs()),
+                public_key,
+                protocol
+            ],
+        )?;
+        db.execute(
+            "DELETE FROM connection_outbox WHERE at < ?",
+            [to_sql_integer(
+                stamp.as_secs().saturating_sub(RETENTION_HOURS * 3600),
+            )],
+        )?;
+        Ok(())
+    }
+
+    /// Exports a bounded durable outbox; unacknowledged batches survive restart.
+    /// # Errors
+    /// Returns a database error; callers must not acknowledge failed exports.
+    pub fn export_traffic(&self) -> Result<NodeTraffic, TrafficError> {
+        self.flush()?;
+        let db = self
+            .0
+            .database
+            .lock()
+            .map_err(|_| TrafficError::new("traffic lock poisoned"))?;
+        let mut query = db.prepare("SELECT h.hour*3600,h.public_key,h.upload_bytes,h.download_bytes FROM traffic_hourly h LEFT JOIN traffic_sent s ON s.hour=h.hour AND s.public_key=h.public_key WHERE s.hour IS NULL OR h.upload_bytes!=s.upload_bytes OR h.download_bytes!=s.download_bytes ORDER BY h.hour DESC,h.public_key LIMIT 128")?;
+        let hours = query
+            .query_map([], |r| {
+                Ok(NodeTrafficHour {
+                    hour: r.get(0)?,
+                    public_key: r.get(1)?,
+                    upload_bytes: r.get(2)?,
+                    download_bytes: r.get(3)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut query = db.prepare(
+            "SELECT id,at,public_key,protocol FROM connection_outbox ORDER BY at,id LIMIT 128",
+        )?;
+        let connections = query
+            .query_map([], |r| {
+                Ok(NodeConnection {
+                    id: r.get(0)?,
+                    at: r.get(1)?,
+                    public_key: r.get(2)?,
+                    protocol: r.get(3)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(NodeTraffic { hours, connections })
+    }
+
+    /// Acknowledges exactly the exported values, never newer counters.
+    /// # Errors
+    /// Returns a database error; retrying the same batch is safe.
+    pub fn acknowledge_traffic(&self, report: &NodeTraffic) -> Result<(), TrafficError> {
+        let mut db = self
+            .0
+            .database
+            .lock()
+            .map_err(|_| TrafficError::new("traffic lock poisoned"))?;
+        let tx = db.transaction()?;
+        for h in &report.hours {
+            tx.execute("INSERT INTO traffic_sent VALUES(?,?,?,?) ON CONFLICT(hour,public_key) DO UPDATE SET upload_bytes=max(upload_bytes,excluded.upload_bytes),download_bytes=max(download_bytes,excluded.download_bytes)", params![h.hour/3600,h.public_key,h.upload_bytes,h.download_bytes])?;
+        }
+        for e in &report.connections {
+            tx.execute("DELETE FROM connection_outbox WHERE id=?", [&e.id])?;
+        }
+        tx.execute(
+            "DELETE FROM traffic_sent WHERE hour < ?",
+            [to_sql_integer(
+                (unix_seconds() / 3600).saturating_sub(RETENTION_HOURS),
+            )],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+}
+
 fn build_report(
     hours: u64,
     now: u64,
@@ -401,6 +498,14 @@ fn configure_database(connection: &Connection) -> Result<(), TrafficError> {
             download_bytes INTEGER NOT NULL CHECK(download_bytes >= 0),
             PRIMARY KEY (hour, public_key)
          ) WITHOUT ROWID;
+         CREATE TABLE IF NOT EXISTS traffic_sent (
+            hour INTEGER NOT NULL, public_key TEXT NOT NULL,
+            upload_bytes INTEGER NOT NULL, download_bytes INTEGER NOT NULL,
+            PRIMARY KEY(hour, public_key)
+         ) WITHOUT ROWID;
+         CREATE TABLE IF NOT EXISTS connection_outbox (
+            id TEXT PRIMARY KEY, at INTEGER NOT NULL, public_key TEXT NOT NULL, protocol TEXT NOT NULL
+         );
          CREATE TABLE IF NOT EXISTS traffic_metadata (
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL
@@ -652,6 +757,29 @@ mod tests {
     use tempfile::TempDir;
 
     use super::{TrafficStore, SECONDS_PER_HOUR};
+
+    #[test]
+    fn outbox_survives_restart_and_acknowledges_only_exported_totals() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("traffic.sqlite");
+        let store = TrafficStore::open(&path).unwrap();
+        store.counter("device", "Phone").add_upload(100);
+        store.record_connection("device", "legacy").unwrap();
+        let batch = store.export_traffic().unwrap();
+        assert_eq!(batch.connections.len(), 1);
+        store.counter("device", "Phone").add_upload(50);
+        store.flush().unwrap();
+        store.acknowledge_traffic(&batch).unwrap();
+        drop(store);
+        let reopened = TrafficStore::open(&path).unwrap();
+        let next = reopened.export_traffic().unwrap();
+        assert_eq!(next.hours[0].upload_bytes, 150);
+        assert!(next.connections.is_empty());
+        reopened.acknowledge_traffic(&next).unwrap();
+        assert!(reopened.export_traffic().unwrap().hours.is_empty());
+        reopened.acknowledge_traffic(&batch).unwrap();
+        assert!(reopened.export_traffic().unwrap().hours.is_empty());
+    }
 
     #[test]
     fn reports_and_reopens_hourly_traffic() {

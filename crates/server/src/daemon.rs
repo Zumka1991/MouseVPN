@@ -422,6 +422,7 @@ pub fn run(config: &ValidatedServerConfig) -> Result<(), ServerDaemonError> {
     crate::controller::start(
         &authorized,
         &encode_public_key(&config.server_public_key),
+        &traffic,
         move || observed_sessions.read().ok().map(|s| s.online_devices()),
     )?;
     let mut handshake_limiter = HandshakeLimiter::new(50, Duration::from_secs(60));
@@ -783,6 +784,17 @@ fn handle_handshake(
         return;
     }
     drop(guard);
+    let protocol = match wire {
+        WireMode::Legacy => "legacy".to_owned(),
+        WireMode::Speedy { .. } => "speedy".to_owned(),
+        WireMode::Morph { codec, .. } => format!("morph_{}", codec.profile().name()),
+    };
+    if let Err(error) = services
+        .traffic
+        .record_connection(&encode_public_key(&client.public_key), &protocol)
+    {
+        eprintln!("connection history persistence failed: {error}");
+    }
 
     let header = Header {
         kind: PacketKind::HandshakeResponse,

@@ -4,6 +4,7 @@ mod billing;
 mod error;
 mod store;
 mod support;
+mod usage;
 
 use std::{
     collections::HashMap,
@@ -146,6 +147,7 @@ pub fn router(store: Store, admin_token: &str) -> Result<Router, String> {
         .route("/v1/admin/servers/{id}", put(update_server))
         .merge(support::routes())
         .merge(billing::routes())
+        .merge(usage::routes())
         .layer(DefaultBodyLimit::max(16 * 1024))
         .layer(middleware::from_fn(security_headers))
         .with_state(app))

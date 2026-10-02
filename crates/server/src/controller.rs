@@ -8,6 +8,7 @@ use std::{
 pub(crate) fn start(
     registry: &SharedDeviceRegistry,
     server_public_key: &str,
+    traffic: &mousevpn_admin_api::TrafficStore,
     online: impl Fn() -> Option<u32> + Send + 'static,
 ) -> io::Result<()> {
     // Expiration runs separately from HTTP: a slow/offline controller cannot
@@ -42,6 +43,7 @@ pub(crate) fn start(
     }
     let client = AccountClient::new(&base).map_err(io::Error::other)?;
     let registry = registry.clone();
+    let traffic = traffic.clone();
     let server_public_key = server_public_key.to_owned();
     thread::spawn(move || loop {
         let response = match online() {
@@ -61,6 +63,19 @@ pub(crate) fn start(
         });
         if let Err(error) = result {
             eprintln!("controller synchronization failed: {error}");
+        }
+        // Access synchronization always precedes statistics. A failed upload stays in the outbox.
+        let upload = traffic
+            .export_traffic()
+            .map_err(|e| e.to_string())
+            .and_then(|batch| {
+                client.report_traffic(&token, &batch)?;
+                traffic
+                    .acknowledge_traffic(&batch)
+                    .map_err(|e| e.to_string())
+            });
+        if let Err(error) = upload {
+            eprintln!("traffic synchronization failed: {error}");
         }
         thread::sleep(Duration::from_secs(15));
     });

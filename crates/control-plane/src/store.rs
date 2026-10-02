@@ -62,6 +62,8 @@ pub struct AdminUser {
     pub all_servers: bool,
     pub server_ids: Vec<String>,
     pub payments: Vec<Payment>,
+    pub lifetime: bool,
+    pub paid_valid_until: i64,
 }
 
 #[derive(Serialize)]
@@ -117,7 +119,7 @@ impl Store {
         }
         let db = Connection::open(path)?;
         db.busy_timeout(std::time::Duration::from_secs(5))?;
-        if db.query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))? > 3 {
+        if db.query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))? > 4 {
             return Err("unsupported database version".into());
         }
         db.execute_batch(include_str!("schema.sql"))?;
@@ -187,7 +189,7 @@ impl Store {
         let (login, valid_until, enabled, all_servers): (String, i64, bool, bool) = self
             .db
             .query_row(
-                "SELECT login,valid_until,enabled,all_servers FROM users WHERE id=?",
+                "SELECT login,CASE WHEN EXISTS(SELECT 1 FROM lifetime_access l WHERE l.user_id=users.id AND l.enabled=1) THEN 253402300799 ELSE valid_until END,enabled,all_servers FROM users WHERE id=?",
                 [user],
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
             )
@@ -265,12 +267,15 @@ impl Store {
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
+        let (lifetime, paid_valid_until) = self.db.query_row("SELECT EXISTS(SELECT 1 FROM lifetime_access l WHERE l.user_id=users.id AND l.enabled=1),valid_until FROM users WHERE id=?", [id], |r| Ok((r.get(0)?,r.get(1)?)))?;
         Ok(AdminUser {
             account,
             enabled,
             all_servers,
             server_ids,
             payments,
+            lifetime,
+            paid_valid_until,
         })
     }
 
@@ -338,6 +343,16 @@ impl Store {
         }
         let key = canonical_key(&device.public_key)?;
         let tx = self.db.transaction()?;
+        let previous: Option<String> = tx
+            .query_row(
+                "SELECT user_id FROM device_owners WHERE public_key=?",
+                [&key],
+                |r| r.get(0),
+            )
+            .optional()?;
+        if previous.is_some_and(|owner| owner != user) {
+            return Err(ApiError::conflict("Ключ уже принадлежит другому аккаунту"));
+        }
         let owner: Option<String> = tx
             .query_row(
                 "SELECT user_id FROM devices WHERE public_key=?",
@@ -364,6 +379,7 @@ impl Store {
                 tx.execute("INSERT INTO devices(id,user_id,name,platform,public_key,created_at) VALUES(?,?,?,?,?,?)", params![Uuid::new_v4().to_string(),user,device.name,device.platform,key,now])?;
             }
         }
+        tx.execute("INSERT INTO device_owners VALUES(?,?,?) ON CONFLICT(public_key) DO UPDATE SET name=excluded.name", params![key,user,device.name])?;
         tx.commit()?;
         self.account(user, now)
     }
@@ -438,7 +454,7 @@ impl Store {
             params![now, id],
         )?;
         let until = now + NODE_LEASE_SECONDS;
-        let mut statement = self.db.prepare("SELECT d.name,d.platform,d.public_key,u.valid_until FROM devices d JOIN users u ON u.id=d.user_id WHERE u.enabled=1 AND u.valid_until>? AND (?=1) AND (u.all_servers=1 OR EXISTS(SELECT 1 FROM user_servers a WHERE a.user_id=u.id AND a.server_id=?)) ORDER BY d.id")?;
+        let mut statement = self.db.prepare("SELECT d.name,d.platform,d.public_key,CASE WHEN l.enabled=1 THEN 253402300799 ELSE u.valid_until END FROM devices d JOIN users u ON u.id=d.user_id LEFT JOIN lifetime_access l ON l.user_id=u.id WHERE u.enabled=1 AND (u.valid_until>? OR l.enabled=1) AND (?=1) AND (u.all_servers=1 OR EXISTS(SELECT 1 FROM user_servers a WHERE a.user_id=u.id AND a.server_id=?)) ORDER BY d.id")?;
         let devices = statement
             .query_map(params![now, enabled, id], |row| {
                 Ok(NodeDevice {

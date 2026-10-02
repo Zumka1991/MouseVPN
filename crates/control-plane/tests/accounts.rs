@@ -891,3 +891,238 @@ async fn billing_migration_preserves_existing_accounts_and_payments() {
     .await
     .is_null());
 }
+
+#[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "End-to-end authorization and persistence scenario"
+)]
+async fn lifetime_preserves_paid_expiry_restrictions_blocking_and_node_leases() {
+    let (_temp, app) = setup();
+    let u = user(&app, "friend").await;
+    let uid = u["id"].as_str().unwrap();
+    let a = server(&app, "A").await;
+    let b = server(&app, "B").await;
+    let session = login(&app, "friend").await;
+    let token = session["token"].as_str().unwrap();
+    let path = format!("/v1/admin/users/{uid}/lifetime");
+    assert_eq!(
+        call(&app, "PUT", &path, token, json!({"enabled":true}))
+            .await
+            .0,
+        StatusCode::UNAUTHORIZED
+    );
+    ok(
+        &app,
+        "POST",
+        "/v1/account/devices",
+        token,
+        json!({"name":"Phone","platform":"android","public_key":KEY_B}),
+    )
+    .await;
+    ok(
+        &app,
+        "PUT",
+        &format!("/v1/admin/users/{uid}/access"),
+        OWNER,
+        json!({"enabled":true,"all_servers":false,"server_ids":[a["id"]]}),
+    )
+    .await;
+    let granted = ok(&app, "PUT", &path, OWNER, json!({"enabled":true})).await;
+    assert_eq!(granted["active"], true);
+    assert_eq!(granted["lifetime"], true);
+    assert_eq!(granted["paid_valid_until"], 0);
+    assert_eq!(granted["servers"].as_array().unwrap().len(), 1);
+    let snap = ok(
+        &app,
+        "GET",
+        "/v1/node/snapshot",
+        a["node_token"].as_str().unwrap(),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(snap["devices"].as_array().unwrap().len(), 1);
+    assert_eq!(snap["devices"][0]["valid_until"], snap["lease_until"]);
+    assert!(ok(
+        &app,
+        "GET",
+        "/v1/node/snapshot",
+        b["node_token"].as_str().unwrap(),
+        Value::Null
+    )
+    .await["devices"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+    ok(
+        &app,
+        "PUT",
+        &format!("/v1/admin/users/{uid}/access"),
+        OWNER,
+        json!({"enabled":false,"all_servers":true,"server_ids":[]}),
+    )
+    .await;
+    assert!(ok(
+        &app,
+        "GET",
+        "/v1/node/snapshot",
+        a["node_token"].as_str().unwrap(),
+        Value::Null
+    )
+    .await["devices"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+    ok(
+        &app,
+        "POST",
+        &format!("/v1/admin/users/{uid}/payments"),
+        OWNER,
+        json!({"reference":"gift-test-payment","months":3,"amount_rub":900}),
+    )
+    .await;
+    let removed = ok(&app, "PUT", &path, OWNER, json!({"enabled":false})).await;
+    assert_eq!(removed["valid_until"], removed["paid_valid_until"]);
+    assert_eq!(removed["active"], false);
+    assert!(removed["paid_valid_until"].as_i64().unwrap() > chrono::Utc::now().timestamp());
+}
+
+#[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "End-to-end authorization and persistence scenario"
+)]
+async fn traffic_retries_ordering_server_isolation_revocation_and_privacy() {
+    let (_temp, app) = setup();
+    let u = user(&app, "usage").await;
+    let uid = u["id"].as_str().unwrap();
+    let session = login(&app, "usage").await;
+    let token = session["token"].as_str().unwrap();
+    let enrolled = ok(
+        &app,
+        "POST",
+        "/v1/account/devices",
+        token,
+        json!({"name":"Phone","platform":"android","public_key":KEY_B}),
+    )
+    .await;
+    let device = enrolled["devices"][0]["id"].as_str().unwrap();
+    let a = server(&app, "A").await;
+    let b = server(&app, "B").await;
+    let at = chrono::Utc::now().timestamp();
+    let hour = at / 3600 * 3600;
+    let batch = json!({"hours":[{"hour":hour,"public_key":KEY_B,"upload_bytes":100,"download_bytes":300}],"connections":[{"id":"event-1","at":at,"public_key":KEY_B,"protocol":"morph_balanced"}]});
+    assert_eq!(
+        call(&app, "POST", "/v1/node/traffic", OWNER, batch.clone())
+            .await
+            .0,
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        call(&app, "GET", "/v1/admin/usage", token, Value::Null)
+            .await
+            .0,
+        StatusCode::UNAUTHORIZED
+    );
+    for _ in 0..2 {
+        ok(
+            &app,
+            "POST",
+            "/v1/node/traffic",
+            a["node_token"].as_str().unwrap(),
+            batch.clone(),
+        )
+        .await;
+    }
+    let mut newer = batch.clone();
+    newer["hours"][0]["download_bytes"] = json!(500);
+    ok(
+        &app,
+        "POST",
+        "/v1/node/traffic",
+        a["node_token"].as_str().unwrap(),
+        newer,
+    )
+    .await;
+    ok(
+        &app,
+        "POST",
+        "/v1/node/traffic",
+        a["node_token"].as_str().unwrap(),
+        batch.clone(),
+    )
+    .await;
+    ok(
+        &app,
+        "POST",
+        "/v1/node/traffic",
+        b["node_token"].as_str().unwrap(),
+        batch.clone(),
+    )
+    .await;
+    ok(
+        &app,
+        "DELETE",
+        &format!("/v1/account/devices/{device}"),
+        token,
+        Value::Null,
+    )
+    .await;
+    let mut late = batch.clone();
+    late["hours"][0]["upload_bytes"] = json!(200);
+    ok(
+        &app,
+        "POST",
+        "/v1/node/traffic",
+        a["node_token"].as_str().unwrap(),
+        late,
+    )
+    .await;
+    let result = ok(
+        &app,
+        "GET",
+        &format!("/v1/admin/usage?user={uid}&group=week&offset=420"),
+        OWNER,
+        Value::Null,
+    )
+    .await;
+    assert_eq!(result["users"][0]["upload"], 300);
+    assert_eq!(result["users"][0]["download"], 800);
+    assert_eq!(result["connections"].as_array().unwrap().len(), 2);
+    assert_eq!(result["servers"].as_array().unwrap().len(), 2);
+    assert_eq!(result["series"][0]["upload"], 300);
+    let bucket = result["series"][0]["at"].as_i64().unwrap();
+    assert_eq!((bucket + 420 * 60) / 86400 % 7, 4); // Monday
+    let mut bad = batch;
+    bad["hours"][0]["upload_bytes"] = json!(-1);
+    assert_eq!(
+        call(
+            &app,
+            "POST",
+            "/v1/node/traffic",
+            a["node_token"].as_str().unwrap(),
+            bad
+        )
+        .await
+        .0,
+        StatusCode::BAD_REQUEST
+    );
+    user(&app, "other").await;
+    let other = login(&app, "other").await;
+    assert_eq!(
+        call(
+            &app,
+            "POST",
+            "/v1/account/devices",
+            other["token"].as_str().unwrap(),
+            json!({"name":"Stolen key","platform":"linux","public_key":KEY_B})
+        )
+        .await
+        .0,
+        StatusCode::CONFLICT
+    );
+    assert!(ok(&app, "GET", "/v1/account", token, Value::Null)
+        .await
+        .get("connections")
+        .is_none());
+}

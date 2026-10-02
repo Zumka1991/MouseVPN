@@ -23,23 +23,37 @@ fetch('releases.json', { cache: 'no-store' }).then(response => {
 }).catch(() => {});
 
 const signupForm = document.getElementById('signupForm');
+const signupResult = document.getElementById('signupResult');
+function showSignupResult(success, text) {
+  document.getElementById('signupResultTitle').textContent = success ? 'Заявка принята!' : 'Не удалось отправить заявку';
+  document.getElementById('signupResultText').textContent = text;
+  document.getElementById('signupResultIcon').textContent = success ? '✓' : '!';
+  document.getElementById('signupResultContact').hidden = !success;
+  signupResult.classList.toggle('result-error', !success);
+  signupResult.showModal();
+}
+for (const id of ['signupResultClose', 'signupResultDone']) document.getElementById(id).onclick = () => signupResult.close();
+let signupSending = false;
 signupForm.addEventListener('submit', async event => {
   event.preventDefault();
+  if (signupSending) return;
   const status = document.getElementById('signupStatus');
   const password = document.getElementById('signupPassword');
   const confirmation = document.getElementById('signupConfirm');
   status.className = '';
-  if (password.value !== confirmation.value) { status.textContent = 'Пароли не совпадают'; status.className = 'error'; return; }
-  const submit = document.getElementById('signupSubmit'); submit.disabled = true; status.textContent = 'Отправляем заявку…';
+  if (password.value !== confirmation.value) { status.textContent = 'Пароли не совпадают'; status.className = 'error'; showSignupResult(false, status.textContent); return; }
+  const submit = document.getElementById('signupSubmit'); signupSending = true; submit.disabled = true; const originalLabel = submit.innerHTML; submit.textContent = 'Отправляем…'; signupForm.setAttribute('aria-busy', 'true'); status.textContent = 'Отправляем заявку…';
   try {
-    const response = await fetch(signupForm.action, { method: 'POST', headers: {'Content-Type':'application/json'},
+    const response = await fetch(signupForm.action, { method: 'POST', signal: AbortSignal.timeout(20000), headers: {'Content-Type':'application/json'},
       body: JSON.stringify({email:document.getElementById('signupEmail').value.trim(),password:password.value}) });
     const data = await response.json().catch(() => ({error:'Сервис временно недоступен. Попробуйте позже.'}));
     if (!response.ok) throw new Error(data.error || 'Не удалось отправить заявку');
+    if (typeof data.login !== 'string' || !data.login) throw new Error('Не удалось получить подтверждение. Проверьте вход в приложение или напишите @napsy13.');
     password.value = ''; confirmation.value = '';
     status.textContent = 'Заявка принята! Ваш логин: ' + data.login + '. Напишите @napsy13 в Telegram для оплаты. Доступ появится после её подтверждения.';
-  } catch (error) { status.textContent = error.message; status.className = 'error'; }
-  finally { submit.disabled = false; }
+    status.className = 'success'; showSignupResult(true, status.textContent);
+  } catch (error) { status.textContent = error.name === 'TimeoutError' ? 'Ответ задержался. Заявка могла быть принята — попробуйте войти в приложение или напишите @napsy13.' : error instanceof TypeError ? 'Нет связи с сервером. Проверьте интернет и попробуйте снова.' : error.message; status.className = 'error'; showSignupResult(false, status.textContent); }
+  finally { signupSending = false; submit.disabled = false; submit.innerHTML = originalLabel; signupForm.removeAttribute('aria-busy'); }
 });
 
 // Product preview: navigation only. It never initiates a VPN connection.
