@@ -2664,7 +2664,7 @@ dependencies = [
 
 [[package]]
 name = "mousevpn-linux-gui"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "dirs",
  "fs2",
@@ -2814,7 +2814,7 @@ dependencies = [
 
 [[package]]
 name = "mousevpn-windows-gui"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "dirs",
  "mousevpn-account-client",

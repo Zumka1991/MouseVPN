@@ -12,10 +12,15 @@ use axum::{
 };
 use mousevpn_account_client::{BillingView, NewPaymentRequest, PaymentDetails, PaymentRequest};
 use rusqlite::{params, OptionalExtension};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 pub(crate) fn routes() -> Router<App> {
     Router::new()
+        .route("/v1/pricing", get(public_pricing))
+        .route(
+            "/v1/admin/billing-policy",
+            get(admin_policy).put(save_policy),
+        )
         .route("/v1/account/billing", get(user_billing))
         .route("/v1/account/payment-requests", post(user_request))
         .route(
@@ -37,7 +42,7 @@ async fn user_billing(
     Ok(Json(BillingView {
         details: db.payment_details(None)?,
         month_price: MONTH_PRICE,
-        min_months: 3,
+        min_months: db.billing_policy()?.min_months,
         max_months: 120,
         requests: db.payment_requests(Some(&user))?,
     }))
@@ -174,8 +179,8 @@ impl Store {
         request: &NewPaymentRequest,
         at: i64,
     ) -> Result<PaymentRequest, ApiError> {
-        if uuid::Uuid::parse_str(&request.id).is_err() || !(3..=120).contains(&request.months) {
-            return Err(ApiError::bad("Выберите от 3 до 120 месяцев"));
+        if uuid::Uuid::parse_str(&request.id).is_err() || !(1..=120).contains(&request.months) {
+            return Err(ApiError::bad("Выберите от 1 до 120 месяцев"));
         }
         bounded(&request.note, 500)?;
         let note = request.note.trim();
@@ -197,6 +202,12 @@ impl Store {
                 return Err(ApiError::conflict("Заявка с таким номером уже существует"));
             }
             return Ok(old);
+        }
+        let minimum = self.billing_policy()?.min_months;
+        if request.months < minimum {
+            return Err(ApiError::bad(format!(
+                "Минимальная оплата — {minimum} мес. Обновите раздел оплаты."
+            )));
         }
         let details = self
             .payment_details(Some(request.details_revision))?
@@ -265,6 +276,7 @@ impl Store {
                     months: request.months,
                 },
                 at,
+                1, // The accepted request keeps its original terms after a policy change.
             )?)
         } else {
             None
@@ -272,5 +284,66 @@ impl Store {
         tx.execute("UPDATE payment_requests SET status=?,decided_at=?,admin_note=?,valid_until=? WHERE id=?",params![decision.status,at,decision.note.trim(),until,id])?;
         tx.commit()?;
         self.payment_request(id)
+    }
+}
+
+#[derive(Deserialize, Serialize)]
+pub(crate) struct BillingPolicy {
+    pub revision: i64,
+    pub min_months: u32,
+}
+async fn public_pricing(State(app): State<App>) -> Result<Json<serde_json::Value>, ApiError> {
+    let policy = app.db()?.billing_policy()?;
+    Ok(Json(
+        serde_json::json!({"month_price":MONTH_PRICE,"min_months":policy.min_months,"max_months":120}),
+    ))
+}
+async fn admin_policy(
+    State(app): State<App>,
+    headers: HeaderMap,
+) -> Result<Json<BillingPolicy>, ApiError> {
+    app.admin(&headers)?;
+    Ok(Json(app.db()?.billing_policy()?))
+}
+async fn save_policy(
+    State(app): State<App>,
+    headers: HeaderMap,
+    Json(policy): Json<BillingPolicy>,
+) -> Result<Json<BillingPolicy>, ApiError> {
+    app.admin(&headers)?;
+    Ok(Json(app.db()?.save_billing_policy(&policy)?))
+}
+impl Store {
+    pub(crate) fn billing_policy(&self) -> Result<BillingPolicy, ApiError> {
+        Ok(self.db.query_row(
+            "SELECT revision,min_months FROM billing_policy WHERE id=1",
+            [],
+            |r| {
+                Ok(BillingPolicy {
+                    revision: r.get(0)?,
+                    min_months: r.get(1)?,
+                })
+            },
+        )?)
+    }
+    pub(crate) fn save_billing_policy(
+        &self,
+        policy: &BillingPolicy,
+    ) -> Result<BillingPolicy, ApiError> {
+        if !(1..=120).contains(&policy.min_months) {
+            return Err(ApiError::bad(
+                "Минимальный срок должен быть от 1 до 120 месяцев",
+            ));
+        }
+        if self.db.execute(
+            "UPDATE billing_policy SET min_months=?,revision=revision+1 WHERE id=1 AND revision=?",
+            params![policy.min_months, policy.revision],
+        )? == 0
+        {
+            return Err(ApiError::conflict(
+                "Настройка уже изменена. Обновите её и повторите сохранение",
+            ));
+        }
+        self.billing_policy()
     }
 }

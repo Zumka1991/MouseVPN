@@ -37,6 +37,11 @@ class PaymentActivity : Activity() {
     private var details: JSONObject? = null
     private var draftId = UUID.randomUUID().toString()
     private var draftSignature = ""
+    private var minimum = 1
+    private var maximum = 120
+    private var monthPrice = 300
+    private var policyReady = false
+    private lateinit var terms: TextView
     private var busy = false
     private var started = false
     private var approvedIds = emptySet<String>()
@@ -75,9 +80,9 @@ class PaymentActivity : Activity() {
         instructions = AppUi.text(detailsCard, "", 14f, secondary = true)
         form = AppUi.card(content).apply { visibility = View.GONE }
         AppUi.text(form, "2. Сообщите об оплате", 18f, bold = true)
-        AppUi.text(form, "300 ₽ в месяц · от 3 месяцев. Владелец проверит поступление и добавит месяцы.", 14f, secondary = true)
-        months = AppUi.input(form, "Количество месяцев", "3", InputType.TYPE_CLASS_NUMBER, 3)
-        months.setText(savedInstanceState?.getString("months") ?: "3")
+        terms = AppUi.text(form, "Загружаем условия оплаты…", 14f, secondary = true)
+        months = AppUi.input(form, "Количество месяцев", "Месяцы", InputType.TYPE_CLASS_NUMBER, 3)
+        months.setText(savedInstanceState?.getString("months") ?: "")
         total = AppUi.text(form, "", 26f, bold = true).apply { setTextColor(getColor(R.color.accent)) }
         note = AppUi.input(form, "Комментарий (необязательно)", "Имя отправителя, дата и время перевода", InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE, 500, multiline = true)
         note.setText(savedInstanceState?.getString("note") ?: "")
@@ -97,8 +102,8 @@ class PaymentActivity : Activity() {
     }
     private fun amount() {
         val count = months.text.toString().toIntOrNull()
-        total.text = if (count != null && count in 3..120) "${count * 300} ₽" else "От 3 до 120 месяцев"
-        submit.isEnabled = !busy && count != null && count in 3..120
+        total.text = if (!policyReady) "Загружаем условия…" else if (count != null && count in minimum..maximum) "${count * monthPrice} ₽" else "От $minimum до $maximum мес."
+        submit.isEnabled = !busy && policyReady && details?.optBoolean("enabled") == true && count != null && count in minimum..maximum
     }
     private fun showStatus(text: String) { status.text = text; status.visibility = if (text.isBlank()) View.GONE else View.VISIBLE }
     private fun load(updateDetails: Boolean) = work {
@@ -115,7 +120,7 @@ class PaymentActivity : Activity() {
     private fun send() {
         val count = months.text.toString().toIntOrNull() ?: return
         val d = details ?: return
-        if (count !in 3..120 || !d.optBoolean("enabled")) return
+        if (!policyReady || count !in minimum..maximum || !d.optBoolean("enabled")) return
         val text = note.text.toString().trim()
         val revision = d.getLong("revision")
         val signature = JSONObject().put("months", count).put("note", text).put("revision", revision).toString()
@@ -132,6 +137,10 @@ class PaymentActivity : Activity() {
         }
     }
     private fun paint(view: JSONObject, updateDetails: Boolean) {
+        minimum = view.getInt("min_months"); maximum = view.getInt("max_months"); monthPrice = view.getInt("month_price")
+        policyReady = minimum in 1..120 && maximum in minimum..120 && monthPrice > 0
+        terms.text = "$monthPrice ₽ в месяц · от $minimum мес. Владелец проверит поступление и добавит месяцы."
+        if (months.text.isBlank()) months.setText(minimum.toString())
         showStatus("")
         if (updateDetails) details = view.optJSONObject("details")
         val d = details

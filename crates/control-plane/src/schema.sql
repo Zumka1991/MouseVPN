@@ -45,14 +45,13 @@ CREATE TABLE IF NOT EXISTS payment_details (
 );
 CREATE TABLE IF NOT EXISTS payment_requests (
  id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id),
- months INTEGER NOT NULL CHECK(months BETWEEN 3 AND 120), amount_rub INTEGER NOT NULL,
+ months INTEGER NOT NULL CHECK(months BETWEEN 1 AND 120), amount_rub INTEGER NOT NULL,
  note TEXT NOT NULL, status TEXT NOT NULL CHECK(status IN ('pending','approved','rejected')),
  created_at INTEGER NOT NULL, decided_at INTEGER, admin_note TEXT NOT NULL DEFAULT '',
  valid_until INTEGER, details_revision INTEGER NOT NULL REFERENCES payment_details(revision)
 );
 CREATE UNIQUE INDEX IF NOT EXISTS one_pending_payment ON payment_requests(user_id) WHERE status='pending';
 CREATE INDEX IF NOT EXISTS payment_requests_user ON payment_requests(user_id,created_at);
-PRAGMA user_version=5;
 
 CREATE TABLE IF NOT EXISTS node_status (server_id TEXT PRIMARY KEY REFERENCES servers(id), online_devices INTEGER NOT NULL, updated_at INTEGER NOT NULL);
 
@@ -84,3 +83,11 @@ CREATE TABLE IF NOT EXISTS day_grants (
  PRIMARY KEY(user_id,reference)
 );
 CREATE INDEX IF NOT EXISTS day_grants_user_time ON day_grants(user_id,granted_at);
+
+CREATE TABLE IF NOT EXISTS billing_policy (
+ id INTEGER PRIMARY KEY CHECK(id=1), revision INTEGER NOT NULL DEFAULT 0,
+ min_months INTEGER NOT NULL DEFAULT 3 CHECK(min_months BETWEEN 1 AND 120)
+);
+INSERT OR IGNORE INTO billing_policy(id) VALUES(1);
+
+PRAGMA user_version=6;

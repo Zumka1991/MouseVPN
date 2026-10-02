@@ -78,3 +78,17 @@ previewTabs.forEach((tab, index) => {
     event.preventDefault(); selectPreview(previewTabs[next]); previewTabs[next].focus();
   });
 });
+
+async function refreshPricing() {
+  try {
+    const response=await fetch('/vpn/v1/pricing',{cache:'no-store',signal:AbortSignal.timeout(15000)});
+    if(!response.ok)throw new Error('Pricing unavailable');
+    const price=await response.json();
+    if(!Number.isInteger(price.min_months)||price.min_months<1||price.min_months>120||!Number.isInteger(price.month_price)||price.month_price<=0)throw new Error('Invalid pricing');
+    document.querySelectorAll('[data-minimum-price]').forEach(node=>node.textContent=`От ${price.min_months} мес. за ${price.min_months * price.month_price} ₽`);
+    document.querySelectorAll('[data-minimum]').forEach(node=>node.textContent=`от ${price.min_months} мес.`);
+  } catch (_) { /* Keep the neutral fallback instead of advertising outdated terms. */ }
+}
+refreshPricing();
+setInterval(()=>{if(!document.hidden)refreshPricing();},60000);
+document.addEventListener('visibilitychange',()=>{if(!document.hidden)refreshPricing();});

@@ -2,15 +2,22 @@
 const bill = id => document.getElementById(id);
 let billingBusy = false;
 let billingDetails = null;
+let billingRules = null;
 let billingOwner = null;
 let billingDraft = null;
 let billingRequests = [];
 const paymentLabels = {pending:'На проверке',approved:'Подтверждено',rejected:'Отклонено'};
 function billingAmount() {
   const months = Number(bill('billingMonths').value);
-  bill('billingTotal').textContent = Number.isInteger(months) && months >= 3 && months <= 120 ? `${months * 300} ₽` : 'От 3 месяцев';
+  const valid = billingRules && Number.isInteger(months) && months >= billingRules.min_months && months <= billingRules.max_months;
+  bill('billingTotal').textContent = valid ? `${months * billingRules.month_price} ₽` : billingRules ? `От ${billingRules.min_months} до ${billingRules.max_months} мес.` : 'Загружаем условия…';
+  bill('billingSubmit').disabled = billingBusy || !valid || !billingDetails?.enabled;
 }
 function paintBilling(view, details) {
+  billingRules = view;
+  bill('billingMonths').min = String(view.min_months); bill('billingMonths').max = String(view.max_months);
+  if (!bill('billingMonths').value) bill('billingMonths').value = String(view.min_months);
+  bill('billingTerms').textContent = `${view.month_price} ₽ в месяц · от ${view.min_months} мес.`;
   if (details) {
     billingDetails = view.details;
     const ready = !!billingDetails?.enabled;
@@ -41,7 +48,7 @@ async function billingWork(job, quiet = false) {
   if (!quiet) bill('billingStatus').textContent = 'Загружаем…';
   try { await job(); }
   catch (error) { if (epoch === supportEpoch) bill('billingStatus').textContent = String(error); }
-  finally { billingBusy = false; bill('billingSubmit').disabled = false; bill('billingRefresh').disabled = false; }
+  finally { billingBusy = false; billingAmount(); bill('billingRefresh').disabled = false; }
 }
 async function loadBilling(details = false) {
   const view = await supportInvoke('billing_view');
@@ -52,7 +59,7 @@ async function loadBilling(details = false) {
 }
 bill('openBilling').onclick = () => {
   if (!accountView?.signed_in) { document.querySelector('#openAccount').click(); return; }
-  if (billingOwner !== accountView.account.id) { billingOwner = accountView.account.id; billingDraft = null; billingRequests = []; bill('billingForm').reset(); billingAmount(); bill('billingHistory').replaceChildren(); bill('billingDetails').classList.add('hidden'); }
+  if (billingOwner !== accountView.account.id) { billingOwner = accountView.account.id; billingRules = null; billingDetails = null; billingDraft = null; billingRequests = []; bill('billingForm').reset(); billingAmount(); bill('billingHistory').replaceChildren(); bill('billingDetails').classList.add('hidden'); }
   bill('billingModal').classList.remove('hidden'); billingWork(() => loadBilling(true));
 };
 bill('closeBilling').onclick = () => bill('billingModal').classList.add('hidden');
@@ -64,9 +71,9 @@ bill('billingCopy').onclick = async () => {
 };
 bill('billingForm').onsubmit = event => {
   event.preventDefault();
-  if (!billingDetails?.enabled) return;
+  if (!billingDetails?.enabled || !billingRules) return;
   const value = {months:Number(bill('billingMonths').value),note:bill('billingNote').value.trim(),details_revision:billingDetails.revision};
-  if (!Number.isInteger(value.months) || value.months < 3 || value.months > 120) return;
+  if (!Number.isInteger(value.months) || value.months < billingRules.min_months || value.months > billingRules.max_months) return;
   const signature = JSON.stringify(value);
   if (billingDraft?.signature !== signature) billingDraft = {signature, request:{id:crypto.randomUUID(), ...value}};
   billingWork(async () => { await supportInvoke('billing_submit', {request:billingDraft.request}); billingDraft = null; await loadBilling(); bill('billingStatus').textContent = 'Заявка отправлена. Ожидайте проверки поступления.'; });

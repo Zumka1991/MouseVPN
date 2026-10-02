@@ -63,7 +63,7 @@ class AccountActivity : Activity() {
             val plan = AppUi.card(content)
             AppUi.text(plan, "Одна подписка · два устройства", 17f, bold = true)
             AppUi.space(plan, 8)
-            AppUi.text(plan, "900 ₽ за 3 месяца", 23f, bold = true).setTextColor(getColor(R.color.accent))
+            AppUi.text(plan, "300 ₽ в месяц", 23f, bold = true).setTextColor(getColor(R.color.accent))
             AppUi.space(plan, 6)
             AppUi.text(plan, "300 ₽ в месяц. Оплату подтверждает владелец — автоматических списаний нет.", 14f, secondary = true)
             return

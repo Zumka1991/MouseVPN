@@ -2,6 +2,7 @@
 const $ = id => document.getElementById(id);
 let token = sessionStorage.getItem('relay.owner') || '';
 let servers = [];
+let billingPolicy = null;
 let accounts = [];
 let selectedUser = null;
 let currentTicket = null;
@@ -18,7 +19,8 @@ async function api(path, method = 'GET', body) {
 }
 async function action(button, work) { button.disabled = true; try { await work(); } catch (error) { message(error.message, true); } finally { button.disabled = false; } }
 async function load() {
-  const [users, nodes, tickets] = await Promise.all([api('/v1/admin/users'), api('/v1/admin/servers'), api('/v1/admin/tickets')]);
+  const [users, nodes, tickets, policy] = await Promise.all([api('/v1/admin/users'), api('/v1/admin/servers'), api('/v1/admin/tickets'), api('/v1/admin/billing-policy')]);
+  paintBillingPolicy(policy);
   servers = nodes; accounts = users; updateUsageUsers();
   $('workspace').hidden = false; $('loginPanel').hidden = true; $('refresh').hidden = false;
   $('userCount').textContent = users.length; $('activeCount').textContent = users.filter(user => user.active).length;
@@ -47,10 +49,10 @@ function userCard(user) {
   all.onchange = () => picks.forEach(([, input]) => { input.disabled = all.checked; }); access.append(choices);
   const save = el('button', 'Сохранить распределение'); save.onclick = () => action(save, async () => { await api(`/v1/admin/users/${user.id}/access`, 'PUT', { enabled: user.enabled, all_servers: all.checked, server_ids: all.checked ? [] : picks.filter(([, input]) => input.checked).map(([id]) => id) }); await load(); }); access.append(save); card.append(access);
   const pay = el('details', undefined, 'section'); pay.append(el('summary', 'Оплата и история продлений'));
-  const form = document.createElement('form'); const months = document.createElement('input'); months.type = 'number'; months.min = '3'; months.max = '120'; months.step = '1'; months.value = '3'; months.required = true;
+  const form = document.createElement('form'); const months = document.createElement('input'); months.type = 'number'; months.min = String(billingPolicy.min_months); months.max = '120'; months.step = '1'; months.value = String(billingPolicy.min_months); months.required = true;
   const ref = document.createElement('input'); ref.required = true; ref.maxLength = 120; ref.placeholder = 'Номер перевода или ваша отметка';
   const monthLabel = el('label', 'Месяцы'); monthLabel.append(months); const refLabel = el('label', 'Уникальная отметка платежа'); refLabel.append(ref);
-  const confirm = el('button', 'Подтвердить 900 ₽'); confirm.type = 'submit'; months.oninput = () => { confirm.textContent = `Подтвердить ${Number(months.value) * 300} ₽`; };
+  const confirm = el('button', `Подтвердить ${billingPolicy.min_months * 300} ₽`); confirm.type = 'submit'; months.oninput = () => { confirm.textContent = `Подтвердить ${Number(months.value) * 300} ₽`; };
   form.append(monthLabel, refLabel, confirm); form.onsubmit = event => { event.preventDefault(); action(confirm, async () => { await api(`/v1/admin/users/${user.id}/payments`, 'POST', { reference: ref.value.trim(), months: Number(months.value), amount_rub: Number(months.value) * 300 }); await load(); }); }; pay.append(form);
   for (const payment of user.payments.slice(0, 5)) pay.append(el('p', `${date(payment.confirmed_at)} · ${payment.amount_rub} ₽ · ${payment.months} мес. · ${payment.reference}`, 'payment-history')); card.append(pay);
   const devices = el('section', undefined, 'section'); devices.append(el('h3', 'Устройства'));
@@ -326,3 +328,18 @@ function dayGrantSection(user) {
   if(user.day_grants?.length){const history=el('details');history.append(el('summary','История выдачи дней'));for(const g of user.day_grants)history.append(el('p',`${date(g.granted_at)} · +${g.days} дн. · до ${date(g.valid_until)}${g.note?' · '+g.note:''}`,'payment-history'));section.append(history);}
   return section;
 }
+
+function policyAmount() {
+  const n=Number($('minimumMonths').value);
+  $('billingPolicyAmount').textContent=Number.isInteger(n)&&n>=1&&n<=120?`Минимальная оплата: ${n * 300} ₽ за ${n} мес.`:'Укажите целое число от 1 до 120.';
+}
+function paintBillingPolicy(policy) {
+  billingPolicy=policy; $('minimumMonths').value=String(policy.min_months); policyAmount();
+}
+$('minimumMonths').oninput=policyAmount;
+$('reloadBillingPolicy').onclick=()=>action($('reloadBillingPolicy'),async()=>{paintBillingPolicy(await api('/v1/admin/billing-policy'));renderUsers();});
+$('billingPolicyForm').onsubmit=event=>{event.preventDefault();action(event.submitter,async()=>{
+  if(!billingPolicy)return;
+  paintBillingPolicy(await api('/v1/admin/billing-policy','PUT',{revision:billingPolicy.revision,min_months:Number($('minimumMonths').value)}));
+  renderUsers();message(`Минимальный срок сохранён: ${billingPolicy.min_months} мес. (${billingPolicy.min_months * 300} ₽).`);
+});};

@@ -1206,3 +1206,247 @@ async fn manual_days_require_owner_and_authorize_devices_without_a_payment() {
             <= snapshot["lease_until"].as_u64().unwrap()
     );
 }
+
+#[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "End-to-end policy authorization and accepted-payment compatibility scenario"
+)]
+async fn billing_minimum_is_owner_configurable_and_preserves_accepted_terms() {
+    let (_temp, app) = setup();
+    let person = user(&app, "minimum@example.ru").await;
+    let auth = login(&app, "minimum@example.ru").await;
+    let token = auth["token"].as_str().unwrap();
+    let node = server(&app, "policy-node").await;
+    let policy = "/v1/admin/billing-policy";
+    assert_eq!(
+        ok(&app, "GET", "/v1/pricing", "", Value::Null).await,
+        json!({"min_months":3,"max_months":120,"month_price":300})
+    );
+    for credentials in ["", token, node["node_token"].as_str().unwrap()] {
+        assert_eq!(
+            call(
+                &app,
+                "PUT",
+                policy,
+                credentials,
+                json!({"revision":0,"min_months":1})
+            )
+            .await
+            .0,
+            StatusCode::UNAUTHORIZED
+        );
+    }
+    for invalid in [json!(0), json!(121), json!(-1), json!(1.5)] {
+        assert!(!call(
+            &app,
+            "PUT",
+            policy,
+            OWNER,
+            json!({"revision":0,"min_months":invalid})
+        )
+        .await
+        .0
+        .is_success());
+    }
+    let request_path = "/v1/account/payment-requests";
+    let details=ok(&app,"PUT","/v1/admin/payment-details",OWNER,json!({"revision":0,"enabled":true,"bank":"Test","recipient":"Test","card_number":"0000000000000000","instructions":""})).await;
+    let draft = json!({"id":uuid::Uuid::new_v4().to_string(),"months":1,"note":"","details_revision":details["revision"]});
+    assert_eq!(
+        call(&app, "POST", request_path, token, draft.clone())
+            .await
+            .0,
+        StatusCode::BAD_REQUEST
+    );
+    let manual_path = format!(
+        "/v1/admin/users/{}/payments",
+        person["id"].as_str().unwrap()
+    );
+    let manual = json!({"reference":"minimum-manual","months":1,"amount_rub":300});
+    assert_eq!(
+        call(&app, "POST", &manual_path, OWNER, manual.clone())
+            .await
+            .0,
+        StatusCode::BAD_REQUEST
+    );
+    let changed = ok(
+        &app,
+        "PUT",
+        policy,
+        OWNER,
+        json!({"revision":0,"min_months":1}),
+    )
+    .await;
+    assert_eq!(changed, json!({"revision":1,"min_months":1}));
+    assert_eq!(ok(&app, "GET", policy, OWNER, Value::Null).await, changed);
+    assert_eq!(
+        ok(&app, "GET", "/v1/account/billing", token, Value::Null).await["min_months"],
+        1
+    );
+    assert_eq!(
+        ok(&app, "GET", "/v1/pricing", "", Value::Null).await["min_months"],
+        1
+    );
+    assert_eq!(
+        call(
+            &app,
+            "PUT",
+            policy,
+            OWNER,
+            json!({"revision":0,"min_months":6})
+        )
+        .await
+        .0,
+        StatusCode::CONFLICT
+    );
+    let claim = ok(&app, "POST", request_path, token, draft.clone()).await;
+    assert_eq!(claim["amount_rub"], 300);
+    let paid = ok(&app, "POST", &manual_path, OWNER, manual.clone()).await;
+    ok(
+        &app,
+        "PUT",
+        policy,
+        OWNER,
+        json!({"revision":1,"min_months":6}),
+    )
+    .await;
+    assert_eq!(
+        ok(&app, "POST", request_path, token, draft.clone()).await,
+        claim
+    );
+    assert_eq!(
+        ok(&app, "POST", &manual_path, OWNER, manual.clone()).await,
+        paid
+    );
+    let decision = format!(
+        "/v1/admin/payment-requests/{}/decision",
+        draft["id"].as_str().unwrap()
+    );
+    let approved = ok(&app, "POST", &decision, OWNER, json!({"status":"approved"})).await;
+    let expected = chrono::DateTime::from_timestamp(paid["valid_until"].as_i64().unwrap(), 0)
+        .unwrap()
+        .checked_add_months(chrono::Months::new(1))
+        .unwrap()
+        .timestamp();
+    assert_eq!(approved["valid_until"], expected);
+    assert_eq!(
+        ok(&app, "POST", &decision, OWNER, json!({"status":"approved"})).await,
+        approved
+    );
+    let mut new_draft = draft;
+    new_draft["id"] = json!(uuid::Uuid::new_v4().to_string());
+    assert_eq!(
+        call(&app, "POST", request_path, token, new_draft).await.0,
+        StatusCode::BAD_REQUEST
+    );
+    let mut new_manual = manual;
+    new_manual["reference"] = json!("below-new-minimum");
+    assert_eq!(
+        call(&app, "POST", &manual_path, OWNER, new_manual).await.0,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        ok(
+            &app,
+            "PUT",
+            policy,
+            OWNER,
+            json!({"revision":2,"min_months":120})
+        )
+        .await["min_months"],
+        120
+    );
+}
+
+#[tokio::test]
+async fn minimum_migration_preserves_claims_and_removes_three_month_constraint() {
+    let (temp, app) = setup();
+    user(&app, "migration-minimum@example.ru").await;
+    let auth = login(&app, "migration-minimum@example.ru").await;
+    let token = auth["token"].as_str().unwrap();
+    let details=ok(&app,"PUT","/v1/admin/payment-details",OWNER,json!({"revision":0,"enabled":true,"bank":"Test","recipient":"Test","card_number":"0000000000000000","instructions":""})).await;
+    let draft = json!({"id":uuid::Uuid::new_v4().to_string(),"months":3,"note":"pre-migration","details_revision":details["revision"]});
+    let claim = ok(
+        &app,
+        "POST",
+        "/v1/account/payment-requests",
+        token,
+        draft.clone(),
+    )
+    .await;
+    drop(app);
+    let path = temp.path().join("accounts.sqlite");
+    let db = rusqlite::Connection::open(&path).unwrap();
+    // Recreate the actual v5 constraint, then exercise the normal startup migration.
+    db.execute_batch(
+        &include_str!("../src/migrate_v6.sql").replace("BETWEEN 1 AND 120", "BETWEEN 3 AND 120"),
+    )
+    .unwrap();
+    db.execute_batch("DROP TABLE billing_policy; PRAGMA user_version=5;")
+        .unwrap();
+    drop(db);
+    let app = router(Store::open(&path).unwrap(), OWNER).unwrap();
+    assert_eq!(
+        ok(
+            &app,
+            "POST",
+            "/v1/account/payment-requests",
+            token,
+            draft.clone()
+        )
+        .await,
+        claim
+    );
+    let decision = format!(
+        "/v1/admin/payment-requests/{}/decision",
+        draft["id"].as_str().unwrap()
+    );
+    ok(
+        &app,
+        "POST",
+        &decision,
+        OWNER,
+        json!({"status":"rejected","note":"test"}),
+    )
+    .await;
+    ok(
+        &app,
+        "PUT",
+        "/v1/admin/billing-policy",
+        OWNER,
+        json!({"revision":0,"min_months":1}),
+    )
+    .await;
+    let new = json!({"id":uuid::Uuid::new_v4().to_string(),"months":1,"note":"after migration","details_revision":details["revision"]});
+    assert_eq!(
+        ok(&app, "POST", "/v1/account/payment-requests", token, new).await["amount_rub"],
+        300
+    );
+    let db = rusqlite::Connection::open(&path).unwrap();
+    assert_eq!(
+        db.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        6
+    );
+    assert_eq!(
+        db.query_row("SELECT count(*) FROM payment_requests", [], |r| r
+            .get::<_, i64>(0))
+            .unwrap(),
+        2
+    );
+    assert_eq!(
+        db.query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |r| r
+            .get::<_, i64>(
+            0
+        ))
+        .unwrap(),
+        0
+    );
+    drop(app);
+    drop(db);
+    let app = router(Store::open(&path).unwrap(), OWNER).unwrap();
+    assert_eq!(
+        ok(&app, "GET", "/v1/pricing", "", Value::Null).await["min_months"],
+        1
+    );
+}

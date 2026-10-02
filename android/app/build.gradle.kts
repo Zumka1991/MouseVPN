@@ -12,8 +12,8 @@ android {
         applicationId = "dev.mousevpn.app"
         minSdk = 26
         targetSdk = 36
-        versionCode = 21
-        versionName = "0.2.4"
+        versionCode = 22
+        versionName = "0.2.5"
         val accountUrl = providers.gradleProperty("accountServiceUrl").orElse("").get()
             .replace("\\", "\\\\").replace("\"", "\\\"")
         buildConfigField("String", "ACCOUNT_SERVICE_URL", "\"$accountUrl\"")

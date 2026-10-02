@@ -87,7 +87,7 @@
       <p class="modal-description">Переведите деньги по реквизитам в приложении своего банка. Затем отправьте заявку — владелец проверит поступление и продлит подписку.</p>
       <p id="billingStatus" role="status" aria-live="polite"></p>
       <div id="billingDetails" class="hidden"><div class="billing-recipient"><small id="billingBank"></small><strong id="billingRecipient"></strong><div class="billing-card-number"><input id="billingCard" readonly aria-label="Номер карты получателя"><button id="billingCopy" type="button" class="secondary-button">Копировать</button></div><p id="billingInstructions"></p></div>
-      <form id="billingForm"><div class="billing-amount"><label for="billingMonths">Месяцы<input id="billingMonths" type="number" min="3" max="120" step="1" value="3" required></label><div><strong id="billingTotal">900 ₽</strong><small>300 ₽ в месяц · от 3 месяцев</small></div></div><label for="billingNote">Комментарий к переводу (необязательно)</label><textarea id="billingNote" maxlength="500" rows="2" placeholder="Имя отправителя, дата и время перевода"></textarea><button id="billingSubmit" class="primary-button" type="submit">Я оплатил — отправить заявку</button></form></div>
+      <form id="billingForm"><div class="billing-amount"><label for="billingMonths">Месяцы<input id="billingMonths" type="number" min="1" max="120" step="1" required></label><div><strong id="billingTotal">Загружаем условия…</strong><small id="billingTerms">Условия оплаты загружаются</small></div></div><label for="billingNote">Комментарий к переводу (необязательно)</label><textarea id="billingNote" maxlength="500" rows="2" placeholder="Имя отправителя, дата и время перевода"></textarea><button id="billingSubmit" class="primary-button" type="submit">Я оплатил — отправить заявку</button></form></div>
       <p id="billingPending" class="hidden">Заявка на проверке. Повторно переводить деньги не нужно. Результат появится здесь автоматически.</p><h3>Мои заявки</h3><div id="billingHistory"></div><button id="billingRefresh" type="button" class="secondary-button">Обновить</button>
       </section></div>
     <div id="settingsModal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
@@ -135,7 +135,7 @@
         <p id="accountNotice" class="field-help" role="status"></p>
         <p id="accountStatus" class="modal-description" role="status"></p>
         <div id="accountDetails" class="hidden">
-          <p id="subscriptionUntil" class="modal-description"></p><p class="field-help">300 ₽ в месяц · минимум 900 ₽ за 3 месяца · два устройства</p>
+          <p id="subscriptionUntil" class="modal-description"></p><p class="field-help">300 ₽ в месяц · два устройства. Минимальный срок указан в разделе «Оплата».</p>
           <h3>Мои устройства <small id="deviceCount"></small></h3>
           <button id="accountRegister" class="primary-button hidden" type="button">Подключить этот компьютер к подписке</button>
           <div id="accountDevices" class="account-devices"></div>

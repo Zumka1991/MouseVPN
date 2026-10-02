@@ -120,8 +120,12 @@ impl Store {
         }
         let db = Connection::open(path)?;
         db.busy_timeout(std::time::Duration::from_secs(5))?;
-        if db.query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))? > 5 {
+        let version = db.query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))?;
+        if version > 6 {
             return Err("unsupported database version".into());
+        }
+        if version < 6 && db.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='payment_requests')",[],|r|r.get::<_,bool>(0))? {
+            db.execute_batch(include_str!("migrate_v6.sql"))?;
         }
         db.execute_batch(include_str!("schema.sql"))?;
         Ok(Self { db })
@@ -327,8 +331,9 @@ impl Store {
                 "Для заявки используйте подтверждение в разделе оплаты",
             ));
         }
+        let minimum = self.billing_policy()?.min_months;
         let tx = self.db.transaction()?;
-        record_payment(&tx, user, payment, now)?;
+        record_payment(&tx, user, payment, now, minimum)?;
         tx.commit()?;
         self.admin_user(user, now)
     }
@@ -623,13 +628,14 @@ pub(crate) fn record_payment(
     user: &str,
     payment: &ConfirmPayment,
     now: i64,
+    minimum: u32,
 ) -> Result<i64, ApiError> {
     printable(&payment.reference, 120)?;
-    if !(3..=120).contains(&payment.months)
+    if !(1..=120).contains(&payment.months)
         || payment.amount_rub != MONTH_PRICE * i64::from(payment.months)
     {
         return Err(ApiError::bad(
-            "Минимум 3 месяца; сумма должна быть 300 ₽ × число месяцев",
+            "От 1 до 120 месяцев; сумма должна быть 300 ₽ × число месяцев",
         ));
     }
     let previous: Option<(i64, u32)> = tx
@@ -646,6 +652,11 @@ pub(crate) fn record_payment(
             ));
         }
     } else {
+        if payment.months < minimum {
+            return Err(ApiError::bad(format!(
+                "Минимальная оплата — {minimum} мес."
+            )));
+        }
         let until: i64 = tx
             .query_row("SELECT valid_until FROM users WHERE id=?", [user], |row| {
                 row.get(0)
