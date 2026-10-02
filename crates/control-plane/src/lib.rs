@@ -2,6 +2,7 @@
 
 mod billing;
 mod error;
+mod grants;
 mod store;
 mod support;
 mod usage;
@@ -148,6 +149,7 @@ pub fn router(store: Store, admin_token: &str) -> Result<Router, String> {
         .merge(support::routes())
         .merge(billing::routes())
         .merge(usage::routes())
+        .merge(grants::routes())
         .layer(DefaultBodyLimit::max(16 * 1024))
         .layer(middleware::from_fn(security_headers))
         .with_state(app))

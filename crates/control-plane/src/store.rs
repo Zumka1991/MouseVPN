@@ -64,6 +64,7 @@ pub struct AdminUser {
     pub payments: Vec<Payment>,
     pub lifetime: bool,
     pub paid_valid_until: i64,
+    pub(crate) day_grants: Vec<crate::grants::DayGrant>,
 }
 
 #[derive(Serialize)]
@@ -119,7 +120,7 @@ impl Store {
         }
         let db = Connection::open(path)?;
         db.busy_timeout(std::time::Duration::from_secs(5))?;
-        if db.query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))? > 4 {
+        if db.query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))? > 5 {
             return Err("unsupported database version".into());
         }
         db.execute_batch(include_str!("schema.sql"))?;
@@ -276,6 +277,7 @@ impl Store {
             payments,
             lifetime,
             paid_valid_until,
+            day_grants: self.day_grants(id)?,
         })
     }
 

@@ -38,7 +38,8 @@ function userCard(user) {
   const lifetimeLabel=el('label','Бессрочный доступ (для друзей)','check section');
   const lifetimeInput=document.createElement('input');lifetimeInput.type='checkbox';lifetimeInput.checked=user.lifetime;
   lifetimeInput.onchange=()=>action(lifetimeInput,async()=>{try{await api(`/v1/admin/users/${user.id}/lifetime`,'PUT',{enabled:lifetimeInput.checked});await load();message(lifetimeInput.checked?'Бессрочный доступ включён':'Действует обычный оплаченный срок');}catch(error){lifetimeInput.checked=user.lifetime;throw error;}});
-  lifetimeLabel.prepend(lifetimeInput);card.append(lifetimeLabel,el('p',`Оплаченный срок: ${date(user.paid_valid_until)}. Лимит устройств и распределение серверов сохраняются.`,'muted'));
+  lifetimeLabel.prepend(lifetimeInput);card.append(lifetimeLabel,el('p',`Срочный доступ до: ${user.paid_valid_until ? date(user.paid_valid_until) : 'не выдан'}. Лимит устройств и распределение серверов сохраняются.`,'muted'));
+  card.append(dayGrantSection(user));
   const access = el('details', undefined, 'section'); access.append(el('summary', 'Распределение серверов'));
   const all = document.createElement('input'); all.type = 'checkbox'; all.checked = user.all_servers;
   const allLabel = el('label', 'Все серверы, включая новые', 'check'); allLabel.prepend(all); access.append(allLabel);
@@ -299,3 +300,29 @@ $('usagePrev').onclick=()=>{usagePage=Math.max(0,usagePage-1);refreshUsage();};
 $('usageNext').onclick=()=>{usagePage++;refreshUsage();};
 $('logout').addEventListener('click',()=>{usageRequest++;usageBusy=false;for(const id of ['usageMetrics','usageChart','usageUsers','usageServers','usagePeriods','usageConnections'])$(id).replaceChildren();});
 setInterval(()=>{if(!document.hidden&&!usageBusy&&usagePage===0)refreshUsage();},15000);
+
+function dayGrantSection(user) {
+  const section=el('section',undefined,'section');section.append(el('h3','Выдать доступ в днях'));
+  const form=el('form');const days=document.createElement('input');days.type='number';days.min='1';days.max='3650';days.step='1';days.value='1';days.required=true;
+  const dayLabel=el('label','Количество дней');dayLabel.append(days);
+  const note=document.createElement('input');note.maxLength=200;note.placeholder='Например, пробный доступ';
+  const noteLabel=el('label','Комментарий (необязательно)');noteLabel.append(note);
+  const submit=el('button','Добавить дни');submit.type='submit';
+  let reference=crypto.randomUUID();
+  for(const input of [days,note])input.addEventListener('input',()=>{reference=crypto.randomUUID();});
+  form.append(dayLabel,noteLabel,submit);
+  form.onsubmit=event=>{event.preventDefault();if(submit.disabled)return;action(submit,async()=>{
+    days.disabled=true;note.disabled=true;
+    try {
+      const updated=await api(`/v1/admin/users/${user.id}/days`,'POST',{reference,days:Number(days.value),note:note.value.trim()});
+      accounts=accounts.map(u=>u.id===updated.id?updated:u);renderUsers();
+      $('activeCount').textContent=accounts.filter(u=>u.active).length;
+      $('pendingCount').textContent=accounts.filter(u=>!u.valid_until).length;
+      message(`Дни добавлены. Срочный доступ до ${date(updated.paid_valid_until)}${updated.lifetime ? '. Бессрочный доступ остаётся включён' : !updated.enabled ? '. Аккаунт остаётся заблокирован' : ''}`);
+    } finally {days.disabled=false;note.disabled=false;}
+  });};
+  section.append(form,el('p','От 1 дня. Оставшийся срок сохраняется; если доступ закончился, дни считаются с текущего момента. Один день — 24 часа.','muted'));
+  if(user.lifetime)section.append(el('p','Включён бессрочный доступ. Чтобы ограничить его днями, снимите галочку выше.','muted'));
+  if(user.day_grants?.length){const history=el('details');history.append(el('summary','История выдачи дней'));for(const g of user.day_grants)history.append(el('p',`${date(g.granted_at)} · +${g.days} дн. · до ${date(g.valid_until)}${g.note?' · '+g.note:''}`,'payment-history'));section.append(history);}
+  return section;
+}

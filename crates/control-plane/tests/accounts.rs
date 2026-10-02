@@ -1153,3 +1153,56 @@ async fn rejected_login_explains_credentials_without_disclosing_account_existenc
     assert_eq!(body, json!({"error":"Войдите в аккаунт"}));
     login(&app, "login-feedback").await;
 }
+
+#[tokio::test]
+async fn manual_days_require_owner_and_authorize_devices_without_a_payment() {
+    let (_temp, app) = setup();
+    let u = user(&app, "one-day").await;
+    let id = u["id"].as_str().unwrap();
+    let session = login(&app, "one-day").await;
+    let token = session["token"].as_str().unwrap();
+    let server = server(&app, "day-node").await;
+    let path = format!("/v1/admin/users/{id}/days");
+    let body = json!({"reference":uuid::Uuid::new_v4().to_string(),"days":1,"note":"Trial"});
+    assert_eq!(
+        call(&app, "POST", &path, token, body.clone()).await.0,
+        StatusCode::UNAUTHORIZED
+    );
+    let mut bad = body.clone();
+    bad["days"] = json!(0);
+    assert_eq!(
+        call(&app, "POST", &path, OWNER, bad).await.0,
+        StatusCode::BAD_REQUEST
+    );
+    let granted = ok(&app, "POST", &path, OWNER, body.clone()).await;
+    assert_eq!(granted["active"], true);
+    assert_eq!(granted["day_grants"][0]["days"], 1);
+    assert!(granted["payments"].as_array().unwrap().is_empty());
+    assert_eq!(
+        ok(&app, "POST", &path, OWNER, body).await["valid_until"],
+        granted["valid_until"]
+    );
+    let enrolled = ok(
+        &app,
+        "POST",
+        "/v1/account/devices",
+        token,
+        json!({"name":"Windows","platform":"windows","public_key":KEY_B}),
+    )
+    .await;
+    assert_eq!(enrolled["valid_until"], granted["valid_until"]);
+    assert_eq!(enrolled["servers"].as_array().unwrap().len(), 1);
+    let snapshot = ok(
+        &app,
+        "GET",
+        "/v1/node/snapshot",
+        server["node_token"].as_str().unwrap(),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(snapshot["devices"].as_array().unwrap().len(), 1);
+    assert!(
+        snapshot["devices"][0]["valid_until"].as_u64().unwrap()
+            <= snapshot["lease_until"].as_u64().unwrap()
+    );
+}

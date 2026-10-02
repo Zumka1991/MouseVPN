@@ -52,7 +52,7 @@ CREATE TABLE IF NOT EXISTS payment_requests (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS one_pending_payment ON payment_requests(user_id) WHERE status='pending';
 CREATE INDEX IF NOT EXISTS payment_requests_user ON payment_requests(user_id,created_at);
-PRAGMA user_version=4;
+PRAGMA user_version=5;
 
 CREATE TABLE IF NOT EXISTS node_status (server_id TEXT PRIMARY KEY REFERENCES servers(id), online_devices INTEGER NOT NULL, updated_at INTEGER NOT NULL);
 
@@ -76,3 +76,11 @@ CREATE TABLE IF NOT EXISTS traffic_sync (
 );
 
 CREATE TABLE IF NOT EXISTS lifetime_access (user_id TEXT PRIMARY KEY REFERENCES users(id), enabled INTEGER NOT NULL DEFAULT 0);
+
+CREATE TABLE IF NOT EXISTS day_grants (
+ user_id TEXT NOT NULL REFERENCES users(id), reference TEXT NOT NULL,
+ days INTEGER NOT NULL CHECK(days BETWEEN 1 AND 3650), note TEXT NOT NULL,
+ granted_at INTEGER NOT NULL, valid_until INTEGER NOT NULL,
+ PRIMARY KEY(user_id,reference)
+);
+CREATE INDEX IF NOT EXISTS day_grants_user_time ON day_grants(user_id,granted_at);
