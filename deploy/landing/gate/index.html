@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex"><meta name="theme-color" content="#08111f">
+  <title>MouseVPN</title>
+  <meta property="og:title" content="MouseVPN — свой протокол и человек на связи">
+  <meta property="og:description" content="Собственный VPN-протокол с тремя уровнями маскировки и личной поддержкой.">
+  <meta property="og:image" content="https://mousevpn.space/assets/connection-hero.png"><meta property="og:type" content="website">
+  <link rel="icon" href="assets/mousevpn-logo.png" type="image/png">
+  <link rel="stylesheet" href="gate/gate.css?v=20261002"><script src="gate/gate.js?v=20261002" defer></script>
+</head>
+<body>
+<main class="gate">
+  <form id="gateForm" class="gate-card" autocomplete="off">
+    <img class="gate-logo" src="assets/mousevpn-logo.png" alt="" width="72" height="72">
+    <h1>MouseVPN</h1>
+    <p class="gate-lead">Сайт открыт для своих. Введите секретное слово.</p>
+    <label class="visually-hidden" for="gateWord">Секретное слово</label>
+    <input id="gateWord" name="word" type="text" autocapitalize="off" autocorrect="off" spellcheck="false" maxlength="64" placeholder="Секретное слово" required autofocus aria-describedby="gateError">
+    <button class="gate-button" type="submit">Войти <span aria-hidden="true">→</span></button>
+    <p id="gateError" class="gate-error" role="alert" hidden>Неверное слово. Попробуйте ещё раз.</p>
+    <p class="gate-help">Нет слова? Напишите <a href="https://t.me/napsy13" target="_blank" rel="noopener noreferrer">@napsy13</a>.</p>
+  </form>
+</main>
+</body>
+</html>
