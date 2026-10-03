@@ -215,6 +215,7 @@ fn managed_expiration_and_restriction_preserve_legacy_keys_and_live_addresses() 
         .unwrap()
         .as_secs();
     let make = |keys: &KeyPair, name: &str| NodeDevice {
+        account_id: None,
         name: name.to_owned(),
         platform: "windows".to_owned(),
         public_key: mousevpn_config::encode_public_key(&keys.public),
@@ -272,6 +273,7 @@ fn controller_cannot_take_over_legacy_keys_or_revive_expired_keys_after_restart(
         generated_at: now,
         lease_until: now + 300,
         devices: vec![NodeDevice {
+            account_id: None,
             name: "collision".to_owned(),
             platform: "android".to_owned(),
             public_key: legacy.public_key.clone(),
@@ -294,4 +296,65 @@ fn controller_cannot_take_over_legacy_keys_or_revive_expired_keys_after_restart(
     assert!(reopened
         .authorize(&decode_public_key(&legacy.public_key).unwrap())
         .is_some());
+}
+
+#[test]
+fn traffic_groups_follow_accounts_survive_restart_and_invalidate_changed_ownership() {
+    use mousevpn_account_client::{NodeDevice, NodeSnapshot};
+    let temporary = TempDir::new().unwrap();
+    let registry = registry(temporary.path());
+    let keys: Vec<_> = (0..3).map(|_| KeyPair::generate().unwrap()).collect();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let mut snapshot = NodeSnapshot {
+        server_id: "node-a".into(),
+        server_public_key: String::new(),
+        generated_at: now,
+        lease_until: now + 300,
+        devices: keys
+            .iter()
+            .enumerate()
+            .map(|(index, key)| NodeDevice {
+                account_id: Some(if index < 2 { "alice" } else { "bob" }.into()),
+                name: format!("device-{index}"),
+                platform: "linux".into(),
+                public_key: mousevpn_config::encode_public_key(&key.public),
+                valid_until: now + 200,
+            })
+            .collect(),
+    };
+    registry.sync_managed(&snapshot, now).unwrap();
+    let first = registry.authorize(&keys[0].public).unwrap();
+    assert_eq!(
+        first.traffic_group,
+        registry.authorize(&keys[1].public).unwrap().traffic_group
+    );
+    assert_ne!(
+        first.traffic_group,
+        registry.authorize(&keys[2].public).unwrap().traffic_group
+    );
+    let reopened = SharedDeviceRegistry::open(
+        temporary.path().join("devices.toml"),
+        Vec::new(),
+        "10.77.0.1".parse().unwrap(),
+        24,
+    )
+    .unwrap();
+    assert_eq!(
+        reopened.authorize(&keys[0].public).unwrap().traffic_group,
+        first.traffic_group
+    );
+    registry.sync_managed(&snapshot, now).unwrap();
+    assert!(first.authorization.is_active());
+    snapshot.devices[0].account_id = Some("bob".into());
+    registry.sync_managed(&snapshot, now).unwrap();
+    assert!(!first.authorization.is_active());
+    assert_eq!(
+        registry.authorize(&keys[0].public).unwrap().traffic_group,
+        registry.authorize(&keys[2].public).unwrap().traffic_group
+    );
+    snapshot.devices[0].account_id = Some(String::new());
+    assert!(registry.sync_managed(&snapshot, now).is_err());
 }

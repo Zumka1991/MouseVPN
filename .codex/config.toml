@@ -1,6 +1,6 @@
 [mcp_servers.codegraph]
-command = "/home/zumka/.local/bin/codegraph"
-args = ["serve", "--mcp", "--path", "/home/zumka/MouseVPN"]
+command = "codegraph"
+args = ["serve", "--mcp"]
 
 [mcp_servers.codegraph.env]
 CODEGRAPH_TELEMETRY = "0"

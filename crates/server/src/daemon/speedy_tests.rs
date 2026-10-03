@@ -16,6 +16,162 @@ struct Fixture {
     cache: HashMap<PublicKey, CachedHandshake>,
 }
 
+/// Run only in a disposable network namespace (see `docs/TRAFFIC_FAIRNESS.md`).
+#[test]
+#[ignore = "requires CAP_NET_ADMIN, /dev/net/tun and an isolated network namespace"]
+#[expect(
+    clippy::too_many_lines,
+    reason = "End-to-end handshake, packet exchange and revocation scenario"
+)]
+fn shaped_packets_cross_real_tun_in_both_directions_for_every_protocol() {
+    let mut fixture = Fixture::new();
+    let tun = Arc::new(
+        LinuxTun::create(&LinuxTunConfig {
+            name: "fairtest0".into(),
+            address: fixture.config.tun.address,
+            prefix_len: 24,
+            mtu: 1_420,
+            tx_queue_len: 256,
+        })
+        .unwrap(),
+    );
+    tun.set_nonblocking(true).unwrap();
+    let (queue, worker) = shaping::start(
+        8,
+        Arc::clone(&tun),
+        fixture.socket.try_clone().unwrap(),
+        Arc::clone(&fixture.sessions),
+    );
+    let tun_worker = start_tun_worker(
+        Arc::clone(&tun),
+        fixture.socket.try_clone().unwrap(),
+        Arc::clone(&fixture.sessions),
+        Some(queue.clone()),
+    );
+    let internet = UdpSocket::bind((fixture.config.tun.address, 0)).unwrap();
+    internet
+        .set_read_timeout(Some(Duration::from_secs(3)))
+        .unwrap();
+    for (index, protocol) in [
+        ClientProtocol::Legacy,
+        ClientProtocol::MorphQuiet,
+        ClientProtocol::Speedy,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let config = fixture.client_config(index, protocol);
+        let wire = ClientWire::from_config(&config).unwrap();
+        let socket = UdpSocket::bind("127.0.0.1:0").unwrap();
+        socket
+            .set_read_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
+        let peer = socket.local_addr().unwrap();
+        let session_id = 1_000 + index as u64;
+        let mut handshake = ClientHandshake::new(
+            &config.client_private_key,
+            &config.server_public_key,
+            &config.context,
+        )
+        .unwrap();
+        let initial = handshake.write_initial(&[]).unwrap();
+        let header = Header {
+            kind: PacketKind::HandshakeInit,
+            flags: 0,
+            session_id,
+            sequence: 0,
+        };
+        let mut request = Vec::new();
+        wire.encode(&Datagram::new(header, &initial).encode(), &mut request)
+            .unwrap();
+        let server_wire = fixture.handle(peer, &request).unwrap();
+        let mut inner = Vec::new();
+        wire.decode(&receive(&socket), &mut inner).unwrap();
+        let response = Datagram::decode(&inner).unwrap();
+        let (crypto, parameters) = handshake.finish(response.payload).unwrap();
+        let parameters = SessionParameters::decode(&parameters).unwrap();
+        let mut plane = TunnelDataPlane::new(session_id, usize::from(parameters.mtu), crypto);
+        let packet = ipv4_udp(
+            parameters.client_address,
+            fixture.config.tun.address,
+            internet.local_addr().unwrap().port(),
+        );
+        wire.encode(&plane.encode_ip(&packet).unwrap(), &mut request)
+            .unwrap();
+        decode_wire_into(
+            &request,
+            &fixture.config,
+            &fixture.registry,
+            &mut fixture.router,
+            &mut inner,
+        )
+        .unwrap();
+        handle_client_data(
+            peer,
+            Datagram::decode(&inner).unwrap(),
+            &server_wire,
+            &fixture.sessions,
+            &tun,
+            &mut Vec::new(),
+            Some((&queue, request.len() + 28)),
+        );
+        let mut payload = [0; 1_500];
+        let (length, from) = internet.recv_from(&mut payload).unwrap();
+        assert_eq!(&payload[..length], b"account-fairness-test");
+        assert_eq!(from.ip(), IpAddr::V4(parameters.client_address));
+        // Kernel IP -> TUN -> server encryption -> fair queue -> client decrypt.
+        internet.send_to(b"shaped-reply", from).unwrap();
+        wire.decode(&receive(&socket), &mut inner).unwrap();
+        let reply = plane.decode_ip(&inner).unwrap();
+        assert_eq!(&reply[28..], b"shaped-reply");
+        let session = Arc::clone(&fixture.sessions.read().unwrap().by_id[&session_id]);
+        fixture
+            .registry
+            .revoke(&encode_public_key(&fixture.clients[index].public))
+            .unwrap();
+        queue.enqueue(
+            shaping::PendingPacket {
+                session,
+                destination: shaping::Destination::Client,
+                bytes: vec![7; 64],
+                payload_len: 32,
+            },
+            92,
+        );
+        socket
+            .set_read_timeout(Some(Duration::from_millis(100)))
+            .unwrap();
+        assert!(socket.recv(&mut payload).is_err());
+        worker.check().unwrap();
+        check_tun_worker(&tun_worker).unwrap();
+    }
+}
+
+fn ipv4_udp(source: Ipv4Addr, destination: Ipv4Addr, port: u16) -> Vec<u8> {
+    let payload = b"account-fairness-test";
+    let mut packet = vec![0; 28 + payload.len()];
+    packet[0] = 0x45;
+    let length = u16::try_from(packet.len()).unwrap();
+    packet[2..4].copy_from_slice(&length.to_be_bytes());
+    packet[8] = 64;
+    packet[9] = 17;
+    packet[12..16].copy_from_slice(&source.octets());
+    packet[16..20].copy_from_slice(&destination.octets());
+    let mut checksum: u32 = packet[..20]
+        .chunks_exact(2)
+        .map(|chunk| u32::from(u16::from_be_bytes([chunk[0], chunk[1]])))
+        .sum();
+    while checksum > 65_535 {
+        checksum = (checksum & 65_535) + (checksum >> 16);
+    }
+    packet[10..12].copy_from_slice(&(!u16::try_from(checksum).unwrap()).to_be_bytes());
+    packet[20..22].copy_from_slice(&40_001_u16.to_be_bytes());
+    packet[22..24].copy_from_slice(&port.to_be_bytes());
+    packet[24..26].copy_from_slice(&(length - 20).to_be_bytes());
+    packet[28..].copy_from_slice(payload);
+    packet
+}
+
 impl Fixture {
     fn new() -> Self {
         let directory = tempfile::tempdir().unwrap();
@@ -26,6 +182,7 @@ impl Fixture {
             .set_read_timeout(Some(Duration::from_secs(3)))
             .unwrap();
         let config = ValidatedServerConfig {
+            traffic: None,
             listen: socket.local_addr().unwrap(),
             public_endpoint: None,
             server_public_key: server.public,

@@ -461,10 +461,11 @@ impl Store {
             params![now, id],
         )?;
         let until = now + NODE_LEASE_SECONDS;
-        let mut statement = self.db.prepare("SELECT d.name,d.platform,d.public_key,CASE WHEN l.enabled=1 THEN 253402300799 ELSE u.valid_until END FROM devices d JOIN users u ON u.id=d.user_id LEFT JOIN lifetime_access l ON l.user_id=u.id WHERE u.enabled=1 AND (u.valid_until>? OR l.enabled=1) AND (?=1) AND (u.all_servers=1 OR EXISTS(SELECT 1 FROM user_servers a WHERE a.user_id=u.id AND a.server_id=?)) ORDER BY d.id")?;
+        let mut statement = self.db.prepare("SELECT d.name,d.platform,d.public_key,CASE WHEN l.enabled=1 THEN 253402300799 ELSE u.valid_until END,u.id FROM devices d JOIN users u ON u.id=d.user_id LEFT JOIN lifetime_access l ON l.user_id=u.id WHERE u.enabled=1 AND (u.valid_until>? OR l.enabled=1) AND (?=1) AND (u.all_servers=1 OR EXISTS(SELECT 1 FROM user_servers a WHERE a.user_id=u.id AND a.server_id=?)) ORDER BY d.id")?;
         let devices = statement
             .query_map(params![now, enabled, id], |row| {
                 Ok(NodeDevice {
+                    account_id: Some(row.get(4)?),
                     name: row.get(0)?,
                     platform: row.get(1)?,
                     public_key: row.get(2)?,

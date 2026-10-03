@@ -45,6 +45,8 @@ pub struct DeviceRecord {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub managed_by: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub valid_until: Option<u64>,
 }
 
@@ -54,6 +56,8 @@ pub struct DeviceLease {
     pub address: Ipv4Addr,
     pub public_key: PublicKey,
     pub authorization: DeviceAuthorization,
+    /// Shared between the devices of one controller account.
+    pub traffic_group: Arc<str>,
 }
 
 #[derive(Clone)]
@@ -120,6 +124,7 @@ impl SharedDeviceRegistry {
                     public_key: encode_public_key(&seed.public_key),
                     address: seed.address,
                     managed_by: None,
+                    account_id: None,
                     valid_until: None,
                 })
                 .collect()
@@ -184,6 +189,7 @@ impl SharedDeviceRegistry {
             public_key: encode_public_key(&keys.public),
             address,
             managed_by: None,
+            account_id: None,
             valid_until: None,
         };
         let mut next = registry.devices.clone();
@@ -197,6 +203,7 @@ impl SharedDeviceRegistry {
                 address: record.address,
                 public_key: keys.public,
                 authorization: DeviceAuthorization::active(),
+                traffic_group: traffic_group(&record),
             },
         );
         Ok(ProvisionedDevice {
@@ -263,6 +270,7 @@ impl SharedDeviceRegistry {
             .collect::<Vec<_>>();
         for incoming in &snapshot.devices {
             validate_name(&incoming.name)?;
+            validate_account_id(incoming.account_id.as_deref())?;
             let key = decode_public_key(&incoming.public_key)
                 .map_err(|error| RegistryError::new(error.to_string()))?;
             if !keys.insert(key)
@@ -277,12 +285,7 @@ impl SharedDeviceRegistry {
             if incoming.valid_until <= now || incoming.valid_until > snapshot.lease_until {
                 return Err(RegistryError::new("invalid controller device deadline"));
             }
-            let platform = match incoming.platform.as_str() {
-                "android" => DevicePlatform::Android,
-                "windows" => DevicePlatform::Windows,
-                "linux" => DevicePlatform::Linux,
-                _ => return Err(RegistryError::new("invalid controller platform")),
-            };
+            let platform = controller_platform(&incoming.platform)?;
             let public_key = encode_public_key(&key);
             let address = registry
                 .devices
@@ -300,6 +303,7 @@ impl SharedDeviceRegistry {
                 public_key,
                 address,
                 managed_by: Some(snapshot.server_id.clone()),
+                account_id: incoming.account_id.clone(),
                 valid_until: Some(incoming.valid_until),
             };
             allocated.push(record.clone());
@@ -314,13 +318,18 @@ impl SharedDeviceRegistry {
             let lease = registry
                 .leases
                 .get(&key)
-                .filter(|lease| lease.address == record.address && lease.authorization.is_active())
+                .filter(|lease| {
+                    lease.address == record.address
+                        && lease.authorization.is_active()
+                        && lease.traffic_group == traffic_group(record)
+                })
                 .cloned()
                 .unwrap_or_else(|| DeviceLease {
                     name: record.name.clone(),
                     address: record.address,
                     public_key: key,
                     authorization: DeviceAuthorization::active(),
+                    traffic_group: traffic_group(record),
                 });
             leases.insert(key, lease);
         }
@@ -390,6 +399,7 @@ fn build_leases(
                     address: device.address,
                     public_key,
                     authorization,
+                    traffic_group: traffic_group(device),
                 },
             ))
         })
@@ -410,4 +420,35 @@ fn validate_snapshot(
         return Err(RegistryError::new("invalid or stale controller snapshot"));
     }
     Ok(())
+}
+
+fn controller_platform(value: &str) -> Result<DevicePlatform, RegistryError> {
+    match value {
+        "android" => Ok(DevicePlatform::Android),
+        "windows" => Ok(DevicePlatform::Windows),
+        "linux" => Ok(DevicePlatform::Linux),
+        _ => Err(RegistryError::new("invalid controller platform")),
+    }
+}
+
+fn validate_account_id(id: Option<&str>) -> Result<(), RegistryError> {
+    if id.is_some_and(|id| {
+        id.is_empty()
+            || id.len() > 128
+            || !id
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+    }) {
+        return Err(RegistryError::new("invalid controller account identity"));
+    }
+    Ok(())
+}
+
+fn traffic_group(device: &DeviceRecord) -> Arc<str> {
+    match (&device.managed_by, &device.account_id) {
+        (Some(controller), Some(account)) => {
+            format!("account:{}:{controller}:{account}", controller.len()).into()
+        }
+        _ => format!("device:{}", device.public_key).into(),
+    }
 }

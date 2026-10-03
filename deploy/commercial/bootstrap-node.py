@@ -36,6 +36,8 @@ def main():
     parser.add_argument('--endpoint', required=True)
     parser.add_argument('--interface', required=True)
     parser.add_argument('--subnet', required=True)
+    parser.add_argument('--bandwidth-mbps', default='auto',
+                        help='Aggregate VPN budget, or auto to measure once before installation')
     args = parser.parse_args()
     host, port_text = args.endpoint.rsplit(':', 1)
     ipaddress.IPv4Address(host)
@@ -51,6 +53,13 @@ def main():
                  '/usr/local/libexec/relay-network', '/etc/systemd/system/relay-network.service',
                  '/etc/systemd/system/relay-agent.service']:
         assert not Path(path).exists(), f'Refusing to replace existing {path}'
+    from bandwidth import measure, traffic_config
+    if args.bandwidth_mbps == 'auto':
+        bandwidth_mbps = measure()['bandwidth_mbps']
+    else:
+        bandwidth_mbps = int(args.bandwidth_mbps)
+        if not 1 <= bandwidth_mbps <= 100_000:
+            parser.error('--bandwidth-mbps must be between 1 and 100000')
     routes = json.loads(run('ip', '-j', '-4', 'route'))
     assert any(r.get('dst') == 'default' and r.get('dev') == args.interface for r in routes)
     for route in routes:
@@ -79,7 +88,7 @@ def main():
         '--client-config', str(stage/'bootstrap-client.toml'), '--server-endpoint', args.endpoint)
     config = Path('/etc/relay-node/server.toml')
     prefix = str(subnet.network_address).rsplit('.', 1)[0]+'.'
-    config.write_text(config.read_text().replace('mousevpn0', 'relay0').replace('10.77.0.', prefix).replace('mtu = 1280', 'mtu = 1400'))
+    config.write_text(config.read_text().replace('mousevpn0', 'relay0').replace('10.77.0.', prefix).replace('mtu = 1280', 'mtu = 1400') + traffic_config(bandwidth_mbps))
     os.chown(config, owner.pw_uid, owner.pw_gid)
     write('/etc/relay-node/local-admin.token', secrets.token_urlsafe(48), 0o600)
     os.chown('/etc/relay-node/local-admin.token', owner.pw_uid, owner.pw_gid)

@@ -6,6 +6,11 @@ use mousevpn_server::{generate_example_configs, run};
 fn main() -> Result<(), Box<dyn Error>> {
     let arguments: Vec<String> = env::args().skip(1).collect();
     match arguments.as_slice() {
+        [flag, path] if flag == "--check-config" => {
+            let config: ServerConfig = load_toml(Path::new(path))?;
+            config.validate()?;
+            println!("configuration valid");
+        }
         [flag, path] if flag == "--config" => {
             let config: ServerConfig = load_toml(Path::new(path))?;
             run(&config.validate()?)?;
@@ -31,6 +36,6 @@ fn main() -> Result<(), Box<dyn Error>> {
 fn usage() -> io::Error {
     io::Error::new(
         io::ErrorKind::InvalidInput,
-        "usage:\n  mousevpn-server --config <server.toml>\n  mousevpn-server generate-example --server-config <server.toml> --client-config <client.toml> --server-endpoint <IP:PORT>",
+        "usage:\n  mousevpn-server --config <server.toml>\n  mousevpn-server --check-config <server.toml>\n  mousevpn-server generate-example --server-config <server.toml> --client-config <client.toml> --server-endpoint <IP:PORT>",
     )
 }

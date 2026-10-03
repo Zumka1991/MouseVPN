@@ -17,6 +17,16 @@ pub struct ServerConfig {
     pub server_private_key: String,
     pub tun: ServerTunConfig,
     pub clients: Vec<AuthorizedClientConfig>,
+    /// Aggregate upload + download budget for this daemon. Absent means disabled.
+    #[serde(default)]
+    pub traffic: Option<TrafficConfig>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct TrafficConfig {
+    /// Decimal megabits/second, including outer packet overhead.
+    pub bandwidth_mbps: u32,
 }
 
 /// Tunnel MTU that still fits a 1500-byte path.
@@ -68,6 +78,7 @@ pub struct ValidatedServerConfig {
     pub context: ProtocolContext,
     pub tun: ServerTunConfig,
     pub clients: Vec<ValidatedAuthorizedClient>,
+    pub traffic: Option<TrafficConfig>,
 }
 
 impl ServerConfig {
@@ -85,6 +96,12 @@ impl ServerConfig {
         }
         if !(576..=9_000).contains(&self.tun.mtu) {
             return Err(ConfigError::InvalidMtu(self.tun.mtu));
+        }
+        if self
+            .traffic
+            .is_some_and(|traffic| !(1..=100_000).contains(&traffic.bandwidth_mbps))
+        {
+            return Err(ConfigError::InvalidBandwidth);
         }
 
         let server_public_key = decode_public_key(&self.server_public_key)?;
@@ -124,6 +141,7 @@ impl ServerConfig {
             server_public_key,
             tun: self.tun,
             clients,
+            traffic: self.traffic,
         })
     }
 }
@@ -139,4 +157,57 @@ fn same_subnet(left: Ipv4Addr, right: Ipv4Addr, prefix_len: u8) -> bool {
         u32::MAX << (32 - u32::from(prefix_len))
     };
     u32::from(left) & mask == u32::from(right) & mask
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn config(traffic: &str) -> ServerConfig {
+        let server = mousevpn_crypto::KeyPair::generate().unwrap();
+        let client = mousevpn_crypto::KeyPair::generate().unwrap();
+        toml::from_str(&format!(
+            r#"
+listen = "127.0.0.1:51820"
+server_public_key = "{}"
+server_private_key = "{}"
+[tun]
+address = "10.77.0.1"
+prefix_len = 24
+dns = "1.1.1.1"
+[[clients]]
+name = "test"
+public_key = "{}"
+address = "10.77.0.2"
+{traffic}
+"#,
+            crate::encode_public_key(&server.public),
+            crate::encode_secret_key(&server.secret),
+            crate::encode_public_key(&client.public)
+        ))
+        .unwrap()
+    }
+
+    #[test]
+    fn old_configs_remain_valid_and_traffic_budget_is_validated() {
+        assert!(config("").validate().unwrap().traffic.is_none());
+        assert_eq!(
+            config("[traffic]\nbandwidth_mbps = 900")
+                .validate()
+                .unwrap()
+                .traffic
+                .unwrap()
+                .bandwidth_mbps,
+            900
+        );
+        for bandwidth in [0, 100_001] {
+            assert!(matches!(
+                config(&format!("[traffic]\nbandwidth_mbps = {bandwidth}")).validate(),
+                Err(ConfigError::InvalidBandwidth)
+            ));
+        }
+        assert!(
+            toml::from_str::<TrafficConfig>("bandwidth_mbps = 900\nbandwith_mbps = 1000").is_err()
+        );
+    }
 }

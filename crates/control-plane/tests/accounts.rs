@@ -263,6 +263,7 @@ async fn paid_accounts_filter_catalog_and_node_authorization_together() {
             .unwrap()
             <= first_snapshot["lease_until"].as_u64().unwrap()
     );
+    assert_eq!(first_snapshot["devices"][0]["account_id"], id);
     let hidden_snapshot = ok(
         &app,
         "GET",

@@ -4,6 +4,7 @@ mod bootstrap;
 mod daemon;
 mod daemon_error;
 mod rate_limit;
+mod fair_queue;
 mod sessions;
 mod state;
 mod users;

@@ -31,6 +31,7 @@ use mousevpn_morph::{
 };
 use mousevpn_speedy::{Direction as SpeedyDirection, SpeedyCodec, SpeedyKey};
 
+mod shaping;
 #[cfg(test)]
 mod speedy_tests;
 use mousevpn_protocol::{Datagram, Header, PacketKind, SessionParameters};
@@ -56,6 +57,7 @@ struct RuntimeSession {
     client_address: Ipv4Addr,
     authorization: DeviceAuthorization,
     traffic: Arc<DeviceTrafficCounter>,
+    traffic_group: Arc<str>,
     /// Current client endpoint, replaced only after a packet authenticates.
     peer: RwLock<SocketAddr>,
     /// Client-to-server direction, driven by the UDP loop alone.
@@ -398,6 +400,10 @@ struct HandshakeServices<'a> {
 /// # Errors
 ///
 /// Returns an error when TUN creation, UDP binding or packet reception fails.
+#[expect(
+    clippy::too_many_lines,
+    reason = "Daemon startup and receive loop share runtime state"
+)]
 pub fn run(config: &ValidatedServerConfig) -> Result<(), ServerDaemonError> {
     warn_about_fragmenting_mtu(config.tun.mtu);
     let tun = Arc::new(LinuxTun::create(&LinuxTunConfig {
@@ -428,7 +434,28 @@ pub fn run(config: &ValidatedServerConfig) -> Result<(), ServerDaemonError> {
     let mut handshake_limiter = HandshakeLimiter::new(50, Duration::from_secs(60));
     let mut handshake_cache: HashMap<PublicKey, CachedHandshake> = HashMap::new();
 
-    let tun_worker = start_tun_worker(Arc::clone(&tun), socket.try_clone()?, Arc::clone(&sessions));
+    let (queue, shaper) = if let Some(traffic) = config.traffic {
+        let (queue, worker) = shaping::start(
+            traffic.bandwidth_mbps,
+            Arc::clone(&tun),
+            socket.try_clone()?,
+            Arc::clone(&sessions),
+        );
+        eprintln!(
+            "MouseVPN account fairness enabled: {} Mbit/s aggregate",
+            traffic.bandwidth_mbps
+        );
+        (Some(queue), Some(worker))
+    } else {
+        eprintln!("MouseVPN account fairness disabled: configure [traffic].bandwidth_mbps");
+        (None, None)
+    };
+    let tun_worker = start_tun_worker(
+        Arc::clone(&tun),
+        socket.try_clone()?,
+        Arc::clone(&sessions),
+        queue.clone(),
+    );
     let mut buffers: Vec<Vec<u8>> = (0..UDP_BATCH_SIZE)
         .map(|_| vec![0_u8; DATAGRAM_BUFFER_LEN])
         .collect();
@@ -436,7 +463,7 @@ pub fn run(config: &ValidatedServerConfig) -> Result<(), ServerDaemonError> {
         MultiHeaders::<SockaddrStorage>::preallocate(UDP_BATCH_SIZE, Some(nix::cmsg_space!(u32)));
     let mut received = Vec::with_capacity(UDP_BATCH_SIZE);
     let mut last_rx_overflow = 0_u32;
-    // Reused across packets so the steady-state receive path never allocates.
+    // Reuse decryption buffers; the optional fair queue owns a copy of each packet.
     let mut plaintext = Vec::with_capacity(DATAGRAM_BUFFER_LEN);
     let mut keepalive = KeepaliveBuffers {
         plaintext: Vec::with_capacity(128),
@@ -446,10 +473,16 @@ pub fn run(config: &ValidatedServerConfig) -> Result<(), ServerDaemonError> {
     let mut morph_payload = Vec::with_capacity(DATAGRAM_BUFFER_LEN);
     loop {
         check_tun_worker(&tun_worker)?;
+        if let Some(worker) = &shaper {
+            worker.check()?;
+        }
         match receive_batch(&socket, &mut buffers, &mut headers, &mut received) {
             Ok(()) => {}
             Err(error) if is_recoverable(&error) => {
                 check_tun_worker(&tun_worker)?;
+                if let Some(worker) = &shaper {
+                    worker.check()?;
+                }
                 continue;
             }
             Err(error) => return Err(error.into()),
@@ -495,7 +528,17 @@ pub fn run(config: &ValidatedServerConfig) -> Result<(), ServerDaemonError> {
                     );
                 }
                 PacketKind::Data => {
-                    handle_client_data(peer, datagram, &wire, &sessions, &tun, &mut plaintext);
+                    handle_client_data(
+                        peer,
+                        datagram,
+                        &wire,
+                        &sessions,
+                        &tun,
+                        &mut plaintext,
+                        queue
+                            .as_ref()
+                            .map(|q| (q, length + if peer.is_ipv4() { 28 } else { 48 })),
+                    );
                 }
                 PacketKind::Keepalive => {
                     handle_keepalive(&socket, peer, datagram, &wire, &sessions, &mut keepalive);
@@ -766,6 +809,7 @@ fn handle_handshake(
     let session = Arc::new(RuntimeSession {
         client_address: client.address,
         authorization: client.authorization,
+        traffic_group: client.traffic_group,
         traffic: services
             .traffic
             .counter(&encode_public_key(&client.public_key), &client.name),
@@ -825,6 +869,7 @@ fn handle_client_data(
     sessions: &SessionMap,
     tun: &LinuxTun,
     plaintext: &mut Vec<u8>,
+    shaped: Option<(&shaping::QueueHandle, usize)>,
 ) {
     let Some(session) = find_session_by_id(sessions, datagram.header.session_id) else {
         return;
@@ -850,6 +895,19 @@ fn handle_client_data(
     if ip.source() != session.client_address {
         return;
     }
+    if let Some((queue, wire_cost)) = shaped {
+        session.adopt_peer(peer);
+        queue.enqueue(
+            shaping::PendingPacket {
+                session,
+                destination: shaping::Destination::Internet,
+                bytes: packet.to_vec(),
+                payload_len: packet.len(),
+            },
+            wire_cost,
+        );
+        return;
+    }
     if tun.send(packet).is_ok() {
         session.traffic.add_upload(packet.len() as u64);
         session.adopt_peer(peer);
@@ -860,10 +918,11 @@ fn start_tun_worker(
     tun: Arc<LinuxTun>,
     socket: UdpSocket,
     sessions: SessionMap,
+    queue: Option<shaping::QueueHandle>,
 ) -> mpsc::Receiver<io::Error> {
     let (failure, failures) = mpsc::sync_channel(1);
     thread::spawn(move || {
-        let error = run_tun_worker(&tun, &socket, &sessions)
+        let error = run_tun_worker(&tun, &socket, &sessions, queue.as_ref())
             .err()
             .unwrap_or_else(|| io::Error::other("TUN worker stopped unexpectedly"));
         let _ = failure.send(error);
@@ -871,7 +930,16 @@ fn start_tun_worker(
     failures
 }
 
-fn run_tun_worker(tun: &LinuxTun, socket: &UdpSocket, sessions: &SessionMap) -> io::Result<()> {
+#[expect(
+    clippy::too_many_lines,
+    reason = "Batched packet processing reuses buffers across iterations"
+)]
+fn run_tun_worker(
+    tun: &LinuxTun,
+    socket: &UdpSocket,
+    sessions: &SessionMap,
+    queue: Option<&shaping::QueueHandle>,
+) -> io::Result<()> {
     let mut packets: Vec<Vec<u8>> = (0..UDP_BATCH_SIZE)
         .map(|_| vec![0_u8; DATAGRAM_BUFFER_LEN])
         .collect();
@@ -947,6 +1015,20 @@ fn run_tun_worker(tun: &LinuxTun, socket: &UdpSocket, sessions: &SessionMap) -> 
             {
                 continue;
             }
+            if let Some(queue) = queue {
+                let bytes = wire_datagrams[datagram_count].clone();
+                let cost = bytes.len() + if peer.is_ipv4() { 28 } else { 48 };
+                queue.enqueue(
+                    shaping::PendingPacket {
+                        session,
+                        destination: shaping::Destination::Client,
+                        bytes,
+                        payload_len: ip.as_bytes().len(),
+                    },
+                    cost,
+                );
+                continue;
+            }
             peers.push(peer);
             traffic.push(Arc::clone(&session.traffic));
             payload_lengths.push(ip.as_bytes().len() as u64);
@@ -992,7 +1074,7 @@ fn send_server_batch(
         &slices[..count],
         &addresses[..count],
         [],
-        MsgFlags::empty(),
+        MsgFlags::MSG_DONTWAIT,
     ) {
         Ok(results) => Ok(results.count()),
         Err(error) if is_recoverable(&io::Error::from(error)) => Ok(0),
@@ -1191,6 +1273,7 @@ mod session_isolation_tests {
         let server = KeyPair::generate().unwrap();
         let clients = [KeyPair::generate().unwrap(), KeyPair::generate().unwrap()];
         let config = ValidatedServerConfig {
+            traffic: None,
             listen: "127.0.0.1:0".parse().unwrap(),
             public_endpoint: None,
             server_public_key: server.public,
@@ -1363,6 +1446,7 @@ mod admin_listener_tests {
         let server_public = server.public;
         let client_public = client.public;
         let config = ValidatedServerConfig {
+            traffic: None,
             listen: "127.0.0.1:51820".parse().expect("listen"),
             public_endpoint: None,
             server_public_key: server_public,

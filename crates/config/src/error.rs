@@ -15,6 +15,7 @@ pub enum ConfigError {
     InvalidPrefix(u8),
     InvalidMtu(u16),
     EmptyClients,
+    InvalidBandwidth,
 }
 
 impl fmt::Display for ConfigError {
@@ -43,6 +44,9 @@ impl fmt::Display for ConfigError {
             Self::InvalidPrefix(prefix) => write!(formatter, "invalid IPv4 prefix length {prefix}"),
             Self::InvalidMtu(mtu) => write!(formatter, "invalid tunnel MTU {mtu}"),
             Self::EmptyClients => formatter.write_str("server must authorize at least one client"),
+            Self::InvalidBandwidth => {
+                formatter.write_str("traffic.bandwidth_mbps must be between 1 and 100000")
+            }
         }
     }
 }

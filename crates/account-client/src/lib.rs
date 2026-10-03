@@ -132,6 +132,9 @@ pub struct EnrollRequest {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct NodeDevice {
+    /// Stable controller-owned account identity, never supplied by the VPN peer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account_id: Option<String>,
     pub name: String,
     pub platform: String,
     pub public_key: String,
