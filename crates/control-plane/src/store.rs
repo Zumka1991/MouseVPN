@@ -65,6 +65,7 @@ pub struct AdminUser {
     pub lifetime: bool,
     pub paid_valid_until: i64,
     pub(crate) day_grants: Vec<crate::grants::DayGrant>,
+    pub(crate) invite: Option<crate::invites::InviteSource>,
 }
 
 #[derive(Serialize)]
@@ -282,6 +283,7 @@ impl Store {
             lifetime,
             paid_valid_until,
             day_grants: self.day_grants(id)?,
+            invite: self.invite_source(id)?,
         })
     }
 

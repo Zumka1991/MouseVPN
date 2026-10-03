@@ -29,6 +29,7 @@ async function load() {
   renderNetwork(nodes);
   renderTickets(tickets);
   await loadPaymentRequests();
+  await loadInvites();
   if (paymentRevision === null) await loadPaymentDetails();
   if (!users.length) $('users').append(el('p', 'Создайте первый аккаунт. Старые ключи продолжают работать на своих серверах.', 'muted'));
   message('Данные обновлены');
@@ -41,6 +42,7 @@ function userCard(user) {
   const lifetimeInput=document.createElement('input');lifetimeInput.type='checkbox';lifetimeInput.checked=user.lifetime;
   lifetimeInput.onchange=()=>action(lifetimeInput,async()=>{try{await api(`/v1/admin/users/${user.id}/lifetime`,'PUT',{enabled:lifetimeInput.checked});await load();message(lifetimeInput.checked?'Бессрочный доступ включён':'Действует обычный оплаченный срок');}catch(error){lifetimeInput.checked=user.lifetime;throw error;}});
   lifetimeLabel.prepend(lifetimeInput);card.append(lifetimeLabel,el('p',`Срочный доступ до: ${user.paid_valid_until ? date(user.paid_valid_until) : 'не выдан'}. Лимит устройств и распределение серверов сохраняются.`,'muted'));
+  if (user.invite) card.append(el('p', `Пришёл по приглашению ${user.invite.note ? '«' + user.invite.note + '» ' : ''}(${user.invite.code}) ${date(user.invite.at)}${user.invite.trial_days ? ` · пробный период ${user.invite.trial_days} дн.` : ''}`, 'muted'));
   card.append(dayGrantSection(user));
   const access = el('details', undefined, 'section'); access.append(el('summary', 'Распределение серверов'));
   const all = document.createElement('input'); all.type = 'checkbox'; all.checked = user.all_servers;
@@ -102,11 +104,11 @@ function renderNetwork(nodes) {
 }
 $('loginForm').onsubmit = event => { event.preventDefault(); token = $('token').value.trim(); action(event.submitter, async () => { await load(); sessionStorage.setItem('relay.owner', token); $('token').value = ''; }); };
 $('refresh').onclick = () => action($('refresh'), load);
-$('logout').onclick = () => { paymentRevision = null; $('paymentDetailsForm').reset(); $('paymentRequests').replaceChildren(); token = ''; sessionStorage.removeItem('relay.owner'); $('workspace').hidden = true; selectedUser = null; $('userSearch').value = ''; $('userDetail').replaceChildren(); $('refresh').hidden = true; $('loginPanel').hidden = false; accounts = []; $('users').replaceChildren(); $('servers').replaceChildren(); $('tickets').replaceChildren(); $('conversationMessages').replaceChildren(); $('conversation').hidden = true; $('replyText').value = ''; currentTicket = null; servers = []; $('nodeToken').value = ''; $('nodeSecret').hidden = true; message('Вы вышли'); };
+$('logout').onclick = () => { $('invites').replaceChildren(); $('inviteCreated').hidden = true; paymentRevision = null; $('paymentDetailsForm').reset(); $('paymentRequests').replaceChildren(); token = ''; sessionStorage.removeItem('relay.owner'); $('workspace').hidden = true; selectedUser = null; $('userSearch').value = ''; $('userDetail').replaceChildren(); $('refresh').hidden = true; $('loginPanel').hidden = false; accounts = []; $('users').replaceChildren(); $('servers').replaceChildren(); $('tickets').replaceChildren(); $('conversationMessages').replaceChildren(); $('conversation').hidden = true; $('replyText').value = ''; currentTicket = null; servers = []; $('nodeToken').value = ''; $('nodeSecret').hidden = true; message('Вы вышли'); };
 $('userForm').onsubmit = event => { event.preventDefault(); action(event.submitter, async () => { await api('/v1/admin/users', 'POST', { login: $('userLogin').value, password: $('userPassword').value }); $('userForm').reset(); await load(); }); };
 $('serverForm').onsubmit = event => { event.preventDefault(); action(event.submitter, async () => { const result = await api('/v1/admin/servers', 'POST', { name: $('serverName').value, endpoint: $('serverEndpoint').value, public_key: $('serverKey').value, protocol: $('serverProtocol').value, enabled: true }); $('nodeToken').value = result.node_token; $('nodeSecret').hidden = false; $('serverForm').reset(); await load(); }); };
 $('hideSecret').onclick = () => { $('nodeToken').value = ''; $('nodeSecret').hidden = true; };
-for (const name of ['users', 'servers', 'tickets', 'payments', 'usage']) $(`${name}Tab`).onclick = () => { for (const panel of ['users', 'servers', 'tickets', 'payments', 'usage']) { $(`${panel}Panel`).hidden = name !== panel; $(`${panel}Tab`).classList.toggle('selected', name === panel); } };
+for (const name of ['users', 'invites', 'servers', 'tickets', 'payments', 'usage']) $(`${name}Tab`).onclick = () => { for (const panel of ['users', 'invites', 'servers', 'tickets', 'payments', 'usage']) { $(`${panel}Panel`).hidden = name !== panel; $(`${panel}Tab`).classList.toggle('selected', name === panel); } };
 function renderTickets(tickets) {
   const unread = tickets.reduce((sum, ticket) => sum + ticket.unread_count, 0);
   $('ticketsTab').textContent = `Тикеты и сообщения${unread ? ` · ${unread} новых` : ''}`;
@@ -343,3 +345,34 @@ $('billingPolicyForm').onsubmit=event=>{event.preventDefault();action(event.subm
   paintBillingPolicy(await api('/v1/admin/billing-policy','PUT',{revision:billingPolicy.revision,min_months:Number($('minimumMonths').value)}));
   renderUsers();message(`Минимальный срок сохранён: ${billingPolicy.min_months} мес. (${billingPolicy.min_months * 300} ₽).`);
 });};
+
+const inviteLink = code => `${location.origin}/?invite=${encodeURIComponent(code)}`;
+async function copyInvite(code) { await navigator.clipboard.writeText(inviteLink(code)); message('Ссылка скопирована'); }
+async function loadInvites() { renderInvites(await api('/v1/admin/invites')); }
+function renderInvites(invites) {
+  $('invites').replaceChildren(...invites.map(invite => {
+    const card = el('article', undefined, 'section');
+    const full = invite.signups.length >= invite.max_signups;
+    const head = el('div', undefined, 'user-header');
+    head.append(el('h3', invite.note || 'Без комментария'), el('span', invite.revoked_at ? 'Отключена' : full ? 'Места заняты' : 'Работает', 'badge ' + (invite.revoked_at ? '' : 'active')));
+    card.append(head, el('code', inviteLink(invite.code), 'invite-link'),
+      el('p', `${invite.trial_days ? `Бесплатно ${invite.trial_days} дн.` : 'Без пробного периода'} · регистраций ${invite.signups.length} из ${invite.max_signups} · создана ${date(invite.created_at)}${invite.revoked_at ? ' · отключена ' + date(invite.revoked_at) : ''}`, 'muted'));
+    if (invite.signups.length) card.append(el('p', `Зарегистрировались: ${invite.signups.join(', ')}`, 'payment-history'));
+    const actions = el('div', undefined, 'actions');
+    const copy = el('button', 'Копировать ссылку'); copy.type = 'button'; copy.onclick = () => action(copy, () => copyInvite(invite.code)); actions.append(copy);
+    if (!invite.revoked_at) {
+      const revoke = el('button', 'Отключить', 'danger'); revoke.type = 'button';
+      revoke.onclick = () => action(revoke, async () => { if (!window.confirm('Отключить ссылку? У всех, кто пришёл по ней, сайт перестанет открываться. Аккаунты и пробные дни сохранятся.')) return; await api(`/v1/admin/invites/${encodeURIComponent(invite.code)}`, 'DELETE'); await loadInvites(); message('Ссылка отключена'); });
+      actions.append(revoke);
+    }
+    card.append(actions); return card;
+  }));
+  if (!invites.length) $('invites').append(el('p', 'Ссылок пока нет. Создайте первую выше.', 'muted'));
+}
+$('inviteForm').onsubmit = event => { event.preventDefault(); action(event.submitter, async () => {
+  const invite = await api('/v1/admin/invites', 'POST', { note: $('inviteNote').value.trim(), trial_days: Number($('inviteTrial').value), max_signups: Number($('inviteSeats').value), code: $('inviteCode').value.trim() });
+  $('inviteNote').value = ''; $('inviteCode').value = '';
+  $('inviteCreatedLink').textContent = inviteLink(invite.code); $('inviteCreated').hidden = false;
+  $('inviteCreatedCopy').onclick = () => action($('inviteCreatedCopy'), () => copyInvite(invite.code));
+  await loadInvites(); message('Ссылка создана. Скопируйте её и отправьте человеку.');
+}); };

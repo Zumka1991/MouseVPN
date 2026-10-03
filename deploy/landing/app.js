@@ -24,8 +24,11 @@ fetch('releases.json', { cache: 'no-store' }).then(response => {
 
 const signupForm = document.getElementById('signupForm');
 const signupResult = document.getElementById('signupResult');
-function showSignupResult(success, text) {
-  document.getElementById('signupResultTitle').textContent = success ? 'Заявка принята!' : 'Не удалось отправить заявку';
+function showSignupResult(success, text, trial = false) {
+  document.getElementById('signupResultTitle').textContent = trial ? 'Подарок активирован!' : success ? 'Заявка принята!' : 'Не удалось отправить заявку';
+  const next = document.getElementById('signupResultContact');
+  if (trial) { next.textContent = 'Скачать приложение ↓'; next.href = '#download'; next.removeAttribute('target'); next.onclick = () => signupResult.close(); }
+  else { next.textContent = 'Обсудить оплату в Telegram ↗'; next.href = 'https://t.me/napsy13'; next.target = '_blank'; next.onclick = null; }
   document.getElementById('signupResultText').textContent = text;
   document.getElementById('signupResultIcon').textContent = success ? '✓' : '!';
   document.getElementById('signupResultContact').hidden = !success;
@@ -50,10 +53,14 @@ signupForm.addEventListener('submit', async event => {
     if (!response.ok) throw new Error(data.error || 'Не удалось отправить заявку');
     if (typeof data.login !== 'string' || !data.login) throw new Error('Не удалось получить подтверждение. Проверьте вход в приложение или напишите @napsy13.');
     password.value = ''; confirmation.value = '';
+    if (Number.isInteger(data.trial_days) && data.trial_days > 0 && Number.isInteger(data.valid_until)) {
+      status.textContent = `Готово! Ваш логин: ${data.login}. Бесплатный доступ действует до ${new Date(data.valid_until * 1000).toLocaleDateString('ru-RU', {day:'numeric',month:'long'})}. Скачайте приложение и войдите с этой почтой и паролем.`;
+      status.className = 'success'; showSignupResult(true, status.textContent, true); hideTrial(); return;
+    }
     status.textContent = 'Заявка принята! Ваш логин: ' + data.login + '. Напишите @napsy13 в Telegram для оплаты. Доступ появится после её подтверждения.';
     status.className = 'success'; showSignupResult(true, status.textContent);
   } catch (error) { status.textContent = error.name === 'TimeoutError' ? 'Ответ задержался. Заявка могла быть принята — попробуйте войти в приложение или напишите @napsy13.' : error instanceof TypeError ? 'Нет связи с сервером. Проверьте интернет и попробуйте снова.' : error.message; status.className = 'error'; showSignupResult(false, status.textContent); }
-  finally { signupSending = false; submit.disabled = false; submit.innerHTML = originalLabel; signupForm.removeAttribute('aria-busy'); }
+  finally { signupSending = false; submit.disabled = false; submit.innerHTML = trialClaimed ? submitLabel : originalLabel; signupForm.removeAttribute('aria-busy'); }
 });
 
 // Product preview: navigation only. It never initiates a VPN connection.
@@ -92,3 +99,40 @@ async function refreshPricing() {
 refreshPricing();
 setInterval(()=>{if(!document.hidden)refreshPricing();},60000);
 document.addEventListener('visibilitychange',()=>{if(!document.hidden)refreshPricing();});
+
+// Invite links: the code itself lives in an HttpOnly cookie, so keep it out of the address bar.
+const arrivedByInvite = new URLSearchParams(location.search).has('invite');
+if (arrivedByInvite) history.replaceState(null, '', location.pathname + location.hash);
+const giftDialog = document.getElementById('giftDialog');
+const submitLabel = document.getElementById('signupSubmit').innerHTML;
+let trialClaimed = false;
+const days = n => `${n} ${n % 10 === 1 && n % 100 !== 11 ? 'день' : n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 12 || n % 100 > 14) ? 'дня' : 'дней'}`;
+function remember(key) { try { localStorage.setItem(key, '1'); } catch (_) { /* Only affects whether the gift is shown again. */ } }
+function seen(key) { try { return localStorage.getItem(key) === '1'; } catch (_) { return false; } }
+function hideTrial() {
+  trialClaimed = true;
+  document.getElementById('trialBanner').hidden = true;
+  document.querySelectorAll('[data-trial-days]').forEach(node => { node.textContent = ''; });
+}
+async function loadTrial() {
+  try {
+    const response = await fetch('/vpn/v1/invite', { cache: 'no-store', signal: AbortSignal.timeout(15000) });
+    if (!response.ok) return;
+    const offer = await response.json();
+    if (!Number.isInteger(offer.trial_days) || offer.trial_days < 1 || offer.trial_days > 365) return;
+    const label = days(offer.trial_days);
+    document.querySelectorAll('[data-trial-days]').forEach(node => { node.textContent = label; });
+    document.getElementById('trialBanner').hidden = false;
+    document.getElementById('signupLead').textContent = `Укажите почту и придумайте пароль для приложения. VPN заработает сразу: ${label} бесплатно, без оплаты и привязки карты. Продлить подписку можно потом, прямо в приложении.`;
+    const submit = document.getElementById('signupSubmit');
+    submit.innerHTML = ''; submit.append(`Забрать ${label} бесплатно `); const arrow = document.createElement('span'); arrow.setAttribute('aria-hidden', 'true'); arrow.textContent = '↗'; submit.append(arrow);
+    const status = document.getElementById('signupStatus');
+    if (!status.className) status.textContent = 'Пробный период начнётся сразу после регистрации. Платить — только если понравится.';
+    const key = `mv.gift.${offer.trial_days}`;
+    if ((arrivedByInvite || !seen(key)) && !giftDialog.open && !signupResult.open) { giftDialog.showModal(); remember(key); }
+  } catch (_) { /* Without an offer the regular signup stays as is. */ }
+}
+document.getElementById('giftClose').onclick = () => giftDialog.close();
+document.getElementById('giftLater').onclick = () => giftDialog.close();
+document.getElementById('giftTake').onclick = () => { giftDialog.close(); setTimeout(() => document.getElementById('signupEmail').focus({ preventScroll: true }), 300); };
+loadTrial();

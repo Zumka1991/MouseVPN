@@ -3,12 +3,14 @@
 mod billing;
 mod error;
 mod grants;
+mod invites;
 mod store;
 mod support;
 mod usage;
 
 use std::{
     collections::HashMap,
+    path::PathBuf,
     sync::{Arc, Mutex, MutexGuard},
     time::{Duration, Instant},
 };
@@ -96,6 +98,19 @@ impl App {
 /// # Errors
 /// Returns an error if the owner token is too short or hashing is unavailable.
 pub fn router(store: Store, admin_token: &str) -> Result<Router, String> {
+    router_with_site(store, admin_token, None)
+}
+
+/// Like [`router`], and also serves the landing page from `public_dir` under
+/// `/site`, open only to visitors who came through an invite link.
+///
+/// # Errors
+/// Returns an error if the owner token is too short or hashing is unavailable.
+pub fn router_with_site(
+    store: Store,
+    admin_token: &str,
+    public_dir: Option<PathBuf>,
+) -> Result<Router, String> {
     if admin_token.len() < 32 || admin_token.chars().any(char::is_whitespace) {
         return Err("admin token needs at least 32 non-whitespace characters".to_owned());
     }
@@ -106,7 +121,11 @@ pub fn router(store: Store, admin_token: &str) -> Result<Router, String> {
         passwords: Arc::new(Semaphore::new(2)),
         login_attempts: Arc::default(),
     };
-    Ok(Router::new()
+    let site = public_dir.map(|directory| invites::Site {
+        app: app.clone(),
+        files: tower_http::services::ServeDir::new(directory),
+    });
+    let router = Router::new()
         .route("/", get(|| async { Html(include_str!("admin.html")) }))
         .route(
             "/admin.js",
@@ -150,9 +169,18 @@ pub fn router(store: Store, admin_token: &str) -> Result<Router, String> {
         .merge(billing::routes())
         .merge(usage::routes())
         .merge(grants::routes())
+        .merge(invites::routes())
         .layer(DefaultBodyLimit::max(16 * 1024))
         .layer(middleware::from_fn(security_headers))
-        .with_state(app))
+        .with_state(app);
+    // The landing page keeps the reverse proxy's caching and CSP headers.
+    Ok(match site {
+        Some(site) => router.nest_service(
+            "/site",
+            Router::new().fallback(invites::site).with_state(site),
+        ),
+        None => router,
+    })
 }
 
 async fn security_headers(request: axum::extract::Request, next: Next) -> Response {
@@ -227,9 +255,18 @@ async fn signup(
     .await
     .map_err(|_| ApiError::bad("Ошибка создания заявки"))?
     .map_err(ApiError::bad)?;
-    app.db()?.create_user(&email, &hash, now())?;
+    let invite = invites::cookie(&headers, invites::COOKIE);
+    let (user, trial_days) = app.db()?.signup(&email, &hash, invite, now())?;
+    if trial_days > 0 {
+        return Ok(Json(serde_json::json!({
+            "login": email,
+            "trial_days": trial_days,
+            "valid_until": user.account.valid_until,
+            "message": "Аккаунт создан, пробный период уже действует. Войдите в приложение с этой почтой и паролем.",
+        })));
+    }
     Ok(Json(
-        serde_json::json!({"login":email,"message":"Заявка принята. Свяжитесь с владельцем для оплаты. VPN-доступ появится после подтверждения оплаты."}),
+        serde_json::json!({"login":email,"trial_days":0,"message":"Заявка принята. Свяжитесь с владельцем для оплаты. VPN-доступ появится после подтверждения оплаты."}),
     ))
 }
 

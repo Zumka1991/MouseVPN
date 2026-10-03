@@ -32,13 +32,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
     let token = fs::read_to_string(&settings.admin_token_file)?;
-    let mut app = mousevpn_control_plane::router(
+    let app = mousevpn_control_plane::router_with_site(
         mousevpn_control_plane::Store::open(&settings.database)?,
         token.trim(),
+        settings.public_dir,
     )?;
-    if let Some(directory) = settings.public_dir {
-        app = app.nest_service("/site", tower_http::services::ServeDir::new(directory));
-    }
     let listener = tokio::net::TcpListener::bind(settings.listen).await?;
     eprintln!("controller listening on {}", settings.listen);
     axum::serve(listener, app)

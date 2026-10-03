@@ -90,4 +90,16 @@ CREATE TABLE IF NOT EXISTS billing_policy (
 );
 INSERT OR IGNORE INTO billing_policy(id) VALUES(1);
 
+CREATE TABLE IF NOT EXISTS invites (
+ code TEXT PRIMARY KEY, note TEXT NOT NULL,
+ trial_days INTEGER NOT NULL CHECK(trial_days BETWEEN 0 AND 365),
+ max_signups INTEGER NOT NULL CHECK(max_signups BETWEEN 1 AND 1000),
+ created_at INTEGER NOT NULL, revoked_at INTEGER
+);
+CREATE TABLE IF NOT EXISTS invite_signups (
+ user_id TEXT PRIMARY KEY REFERENCES users(id), code TEXT NOT NULL REFERENCES invites(code),
+ at INTEGER NOT NULL, trial_days INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS invite_signups_code ON invite_signups(code);
+
 PRAGMA user_version=6;

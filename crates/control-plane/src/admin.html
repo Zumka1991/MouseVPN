@@ -4,7 +4,7 @@
 <header><div><p class="eyebrow"><span class="brand-mark">M</span> MOUSEVPN / ADMIN</p><h1>Центр управления</h1><p>Ваши пользователи, серверы и поддержка в одном месте.</p></div><button id="refresh" hidden>↻ Обновить данные</button></header>
 <section id="loginPanel" class="card"><h2>Вход администратора</h2><form id="loginForm"><label>Токен владельца<input id="token" type="password" autocomplete="off" required></label><button>Войти</button></form></section>
 <p id="status" role="status" aria-live="polite"></p>
-<div id="workspace" hidden><aside class="admin-sidebar"><p class="eyebrow">РАБОЧЕЕ ПРОСТРАНСТВО</p><nav><button id="usersTab" class="selected">Пользователи</button><button id="serversTab">Серверы</button><button id="usageTab">Трафик</button><button id="paymentsTab">Оплата</button><button id="ticketsTab">Тикеты и сообщения</button><button id="logout">Выйти</button></nav></aside><div class="admin-content">
+<div id="workspace" hidden><aside class="admin-sidebar"><p class="eyebrow">РАБОЧЕЕ ПРОСТРАНСТВО</p><nav><button id="usersTab" class="selected">Пользователи</button><button id="invitesTab">Приглашения</button><button id="serversTab">Серверы</button><button id="usageTab">Трафик</button><button id="paymentsTab">Оплата</button><button id="ticketsTab">Тикеты и сообщения</button><button id="logout">Выйти</button></nav></aside><div class="admin-content">
 <div class="metrics"><article class="card"><span>Пользователи</span><strong id="userCount">0</strong></article><article class="card"><span>Активные подписки</span><strong id="activeCount">0</strong></article><article class="card"><span>Заявки без оплаты</span><strong id="pendingCount">0</strong></article><article class="card"><span>Серверы на связи</span><strong id="onlineCount">0</strong></article></div>
 
 
@@ -16,6 +16,13 @@
 <section class="card"><h2>По VPN-серверам</h2><div id="usageServers" class="table-scroll"></div></section>
 <section class="card"><h2>История по периодам</h2><div id="usagePeriods" class="table-scroll"></div></section>
 <section class="card"><h2>Журнал подключений</h2><p class="muted">Создание VPN-соединений, включая переподключения. Журнал начинается с обновления сервера; время отключения не фиксируется.</p><div id="usageConnections" class="table-scroll"></div><div class="actions"><button id="usagePrev">← Новее</button><span id="usagePage"></span><button id="usageNext">Ранее →</button></div></section>
+</section>
+<section id="invitesPanel" hidden>
+<section class="card"><h2>Новая ссылка-приглашение</h2><p class="muted">Сайт открывается только по такой ссылке; без неё он отвечает «страница не найдена». Кто зарегистрируется по ссылке, сразу получит пробные дни — платить нужно будет после теста.</p>
+<form id="inviteForm"><label>Кому или зачем<input id="inviteNote" maxlength="200" placeholder="Например, коллеги Ивана"></label><label>Бесплатных дней<input id="inviteTrial" type="number" min="0" max="365" step="1" value="14" required></label><label>Регистраций по ссылке<input id="inviteSeats" type="number" min="1" max="1000" step="1" value="1" required></label><label>Свой код (необязательно)<input id="inviteCode" maxlength="40" pattern="[A-Za-z0-9\-]{4,40}" placeholder="Сгенерируется сам" autocomplete="off"></label><button>Создать ссылку</button></form>
+<p class="muted">0 дней — ссылка только открывает сайт, без триала. Когда регистрации закончатся, сайт по ссылке продолжит открываться, но новые аккаунты будут без пробных дней.</p>
+<div id="inviteCreated" class="invite-created" hidden><code id="inviteCreatedLink"></code><button id="inviteCreatedCopy" type="button">Копировать ссылку</button></div></section>
+<section class="card"><h2>Ссылки</h2><div id="invites"></div></section>
 </section>
 <section id="paymentsPanel" hidden>
 <section class="card"><h2>Минимальный срок оплаты</h2><form id="billingPolicyForm"><label>Минимум месяцев<input id="minimumMonths" type="number" min="1" max="120" step="1" required></label><button>Сохранить минимальный срок</button><button id="reloadBillingPolicy" type="button">Загрузить сохранённый срок</button></form><p id="billingPolicyAmount" class="muted" aria-live="polite"></p><p class="muted">От 1 до 120 месяцев, по 300 ₽ за месяц. Условие действует для новых оплат на сайте и в приложениях. Уже отправленные заявки сохраняют прежние условия.</p></section>

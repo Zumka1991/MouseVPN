@@ -12,25 +12,8 @@ mousevpn.space {
             header_up X-Relay-Client-IP {remote_host}
         }
     }
-    # Landing pages stay behind the secret word kept in the mv_gate cookie (set by
-    # site/gate/gate.js, lower-cased). Images, the gate itself and downloads stay
-    # open so shared file links and link previews keep working.
-    @locked {
-        not path /assets/* /gate/* /downloads/*
-        expression `{http.request.cookie.mv_gate} != "mousy"`
-    }
-    handle @locked {
-        rewrite * /site/gate/index.html
-        reverse_proxy 127.0.0.1:18797
-        header {
-            Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; object-src 'none'; frame-ancestors 'none'; base-uri 'self'"
-            X-Content-Type-Options nosniff
-            Referrer-Policy no-referrer
-            X-Robots-Tag noindex
-            Cache-Control no-store
-            Vary Cookie
-        }
-    }
+    # relay-hub opens the landing page only through invite links and answers 404
+    # otherwise; it sets no-store itself on those responses.
     handle {
         rewrite * /site{path}
         reverse_proxy 127.0.0.1:18797
@@ -38,7 +21,7 @@ mousevpn.space {
             Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; object-src 'none'; frame-ancestors 'none'; base-uri 'self'"
             X-Content-Type-Options nosniff
             Referrer-Policy no-referrer
-            Cache-Control no-cache
+            ?Cache-Control no-cache
             Vary Cookie
         }
     }
